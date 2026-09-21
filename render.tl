@@ -1,12 +1,13 @@
 --- Draws the blunkychunks board to SVG.
 ---
----   tl run render.tl                          # board.svg, turn-a.svg, turn-b.svg
+---   tl run render.tl                          # images/{board,turn-a,turn-b}.svg
 ---
 --- `tl run` parses flags itself, so anything meant for this script goes after a
 --- `--` separator:
 ---
 ---   tl run render.tl -- --n 6 --side 40       # a smaller board
 ---   tl run render.tl -- --seed 42             # a different pair of turns
+---   tl run render.tl -- --out /tmp/out         # somewhere other than images/
 ---
 --- Compiled, there is nothing to separate:
 ---
@@ -27,11 +28,16 @@ local SQRT3 <const> = math.sqrt(3)
 local GRID <const> = "#9aa5b1"
 local WALL <const> = "#1f2933"
 local INK <const> = "#1f2933"
+local AXIS <const> = "#7b8794"
 local PAPER <const> = "#ffffff"
 
 local LABEL_OFF <const> = 26.0
+local AXIS_GAP <const> = 7.0
+local AXIS_NAME_OFF <const> = 36.0
 local PAD_X <const> = 26.0
-local PAD_Y <const> = 70.0
+local PAD_Y <const> = 54.0 -- room for the labels above and below the board
+local TITLE_H <const> = 46.0 -- extra room above the board for a title and note
+local EPS <const> = 1e-6
 
 local function f(v: number): string
    return ("%.2f"):format(v)
@@ -44,7 +50,9 @@ local record Canvas
    oy: number
 end
 
-local function canvas(width: number, height: number): Canvas
+--- `oy` is where the board's centre line sits, so the top can be padded more
+--- than the bottom when there is a title to make room for.
+local function canvas(width: number, height: number, oy: number): Canvas
    return {
       parts = {
          ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %s %s" width="%d" height="%d">')
@@ -52,7 +60,7 @@ local function canvas(width: number, height: number): Canvas
          ('  <rect width="100%%" height="100%%" fill="%s"/>'):format(PAPER),
       },
       ox = width / 2,
-      oy = height / 2,
+      oy = oy,
    }
 end
 
@@ -158,6 +166,79 @@ local function draw_walls(c: Canvas, n: integer, side: number, turn: Turn)
    emit(c, "  </g>")
 end
 
+--- One family of parallel cell lines, labelled along the wall it runs into.
+local record Axis
+   wall: integer
+   name: string
+   value: function(integer, integer): integer
+end
+
+--- A chunk can only travel along the three lattice directions, and every cell
+--- lies on one line of each family. Each family is perpendicular to one pair
+--- of opposite walls, and we label it along the neutral wall of that pair, so
+--- the labels never crowd the players' names:
+---
+---   b      constant   vertical               top wall (4)
+---   a      constant   rising to the right    lower-left wall (2)
+---   a - b  constant   falling to the right   lower-right wall (0)
+---
+--- A line that leaves the board through a defended wall goes unlabelled, but
+--- no cell is on two such lines: the corner region that misses one neutral
+--- wall always reaches the other two, so every cell can be read off two axes.
+local AXES: {Axis} = {
+   { wall = 4, name = "b", value = function(_: integer, b: integer): integer return b end },
+   { wall = 2, name = "a", value = function(a: integer, _: integer): integer return a end },
+   { wall = 0, name = "a &#8722; b", value = function(a: integer, b: integer): integer return a - b end },
+}
+
+--- Coordinate labels just outside the three neutral walls, plus each axis's
+--- name further out, opposite the wall's midpoint.
+---
+--- Neighbouring lines are half a side apart, too tight for upright numbers, so
+--- each label runs along its own line: rotated to read the right way up, with
+--- whichever end is nearer the wall anchored a small gap outside it.
+local function draw_axes(c: Canvas, n: integer, side: number)
+   local apothem = n * side * SQRT3 / 2
+   local half = n * side / 2 + EPS
+
+   emit(c, ('  <g fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="9"'
+      .. ' dominant-baseline="middle">'):format(AXIS))
+   for _, axis in ipairs(AXES) do
+      local u = board.wall_normal(axis.wall) -- also the direction of the family
+      local along: XY = { x = -u.y, y = u.x }
+
+      -- Reading direction in (-180, 180], then folded into [-90, 90).
+      local angle = (30 + 60 * axis.wall + 180) % 360 - 180
+      local anchor = "start"
+      if angle >= 90 or angle < -90 then
+         angle = angle + (angle > 0 and -180 or 180)
+         anchor = "end"
+      end
+
+      local seen: {integer: boolean} = {}
+      for _, cell in ipairs(board.cells(n)) do
+         local v = axis.value(cell.a, cell.b)
+         if not seen[v] then
+            seen[v] = true
+            -- Every cell on the line shares this exit point, so one will do.
+            local p = board.centroid(cell.a, cell.b, side)
+            local exit = add(p, u, apothem - dot(p, u))
+            if math.abs(dot(exit, along)) <= half then
+               local body = v < 0 and ("&#8722;" .. -v) or tostring(v)
+               text(c, add(exit, u, AXIS_GAP), body, ('text-anchor="%s"'):format(anchor), angle)
+            end
+         end
+      end
+
+      -- The name runs along the wall, like the players' names do.
+      local name_angle = (60 * axis.wall + 120) % 360
+      while name_angle > 90 do name_angle = name_angle - 180 end
+      text(c, add({ x = 0, y = 0 }, u, apothem + AXIS_NAME_OFF), axis.name,
+         'font-size="12" font-style="italic" text-anchor="middle"', name_angle)
+   end
+   emit(c, "  </g>")
+end
+
 --- One chunk: its triangles, then its silhouette in the owner's color.
 local function draw_chunk(c: Canvas, cells: {Cell}, side: number, owner: string)
    emit(c, '  <g stroke-width="0.9" stroke-linejoin="round">')
@@ -227,10 +308,10 @@ end
 
 local function title(c: Canvas, n: integer, side: number, body: string, note: string)
    local top = -(n * side * SQRT3 / 2)
-   text(c, { x = 0, y = top - 44 }, body,
+   text(c, { x = 0, y = top - 80 }, body,
       ('fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="19"'
          .. ' font-weight="600" text-anchor="middle" dominant-baseline="middle"'):format(INK), 0)
-   text(c, { x = 0, y = top - 23 }, note,
+   text(c, { x = 0, y = top - 60 }, note,
       ('fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="12"'
          .. ' text-anchor="middle" dominant-baseline="middle"'):format(GRID), 0)
 end
@@ -238,16 +319,19 @@ end
 --- The empty board.
 local function render_board(n: integer, side: number): string
    local r = n * side
-   local c = canvas(2 * r + 2 * PAD_X, 2 * (r * SQRT3 / 2) + 2 * PAD_Y)
+   local apothem = r * SQRT3 / 2
+   local c = canvas(2 * r + 2 * PAD_X, 2 * apothem + 2 * PAD_Y, PAD_Y + apothem)
    draw_grid(c, n, side)
    draw_walls(c, n, side, nil)
+   draw_axes(c, n, side)
    return finish(c)
 end
 
 --- The board with one shot per player.
 local function render_turn(n: integer, side: number, turn: Turn, size: integer, seed: integer): string
    local r = n * side
-   local c = canvas(2 * r + 2 * PAD_X, 2 * (r * SQRT3 / 2) + 2 * PAD_Y)
+   local apothem = r * SQRT3 / 2
+   local c = canvas(2 * r + 2 * PAD_X, 2 * apothem + 2 * PAD_Y + TITLE_H, PAD_Y + TITLE_H + apothem)
    local rng = bc.seeded_random(seed)
 
    draw_grid(c, n, side)
@@ -257,6 +341,7 @@ local function render_turn(n: integer, side: number, turn: Turn, size: integer, 
       draw_chunk(c, shots[p].cells, side, board.PLAYERS[p].color)
    end
    draw_walls(c, n, side, turn)
+   draw_axes(c, n, side)
    for p, shot in ipairs(shots) do
       draw_arrow(c, shot, n, side, board.PLAYERS[p].color)
    end
@@ -297,8 +382,9 @@ local function main(argv: {string})
    local side = flag("side", 26)
    local size = math.floor(flag("size", 14))
    local seed = math.floor(flag("seed", 7))
-   local dir = opt("out", ".")
+   local dir = opt("out", "images")
 
+   os.execute(("mkdir -p '%s'"):format(dir))
    write(dir .. "/board.svg", render_board(n, side))
    write(dir .. "/turn-a.svg", render_turn(n, side, "A", size, seed))
    write(dir .. "/turn-b.svg", render_turn(n, side, "B", size, seed))

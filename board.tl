@@ -19,16 +19,29 @@
 --- ------
 --- A chunk translates by Eisenstein steps, so it can only travel along the
 --- three lattice directions -- each of which is parallel to one opposite pair
---- of walls. From wall j the two legal headings aim at walls j+2 and j-2; j+2
---- sweeps clockwise and j-2 counterclockwise.
+--- of walls. A player's heading is fixed by their own wall `w` and the turn,
+--- whichever of their two walls they launch from:
 ---
 ---   Turn A (clockwise):        launch from your wall or the one counter-
----                              clockwise of it; travel toward wall j+2.
+---                              clockwise of it; travel at 180 + 60w degrees,
+---                              which from your own wall reaches wall w+2.
 ---   Turn B (counterclockwise): launch from your wall or the one clockwise of
----                              it; travel toward wall j-2.
+---                              it; travel at 240 + 60w degrees, which from
+---                              your own wall reaches wall w-2.
 ---
---- On turn A that sends Player 1's shot from their own wall straight at Player
---- 2's; on turn B the whole cycle reverses.
+--- From the loaned wall the same heading runs to wall w+3, the neutral wall
+--- opposite your own, so a loaned shot is an interceptor rather than an
+--- attack. On turn A Player 1 (bottom wall) heads northwest at Player 2,
+--- Player 2 east at Player 3 and Player 3 southwest at Player 1; turn B
+--- reverses the whole cycle.
+---
+--- Exactness
+--- ---------
+--- Everything the rules depend on -- membership (`contains`), depth toward a
+--- wall (`depth`, `placements`), the per-tick step (`step`) and the cell a
+--- sliding triangle passes over (`swept`) -- is integer arithmetic on (a, b).
+--- Functions that mention `side` or a normal vector produce screen geometry
+--- for drawing and are never consulted by the simulation.
 
 local bc = require("blunkychunks")
 
@@ -101,22 +114,53 @@ function board.corners(a: integer, b: integer, side: number): {XY}
    return out
 end
 
---- Is every corner of cell (a, b) inside the hexagon of side `n`?
+--- Exact integer division by 3, rounding toward minus infinity. Lua's `%`
+--- already floors, so `x - x % 3` is a multiple of 3 and the division is exact
+--- on doubles and Lua integers alike (no `//`, which is 5.3+).
+local function idiv3(x: integer): integer
+   return math.floor((x - x % 3) / 3)
+end
+
+--- Strip coordinates
+--- -----------------
+--- The lattice lines come in three parallel families, each parallel to one
+--- opposite pair of walls, and every cell sits in exactly one strip of each
+--- family. The board is centred on a lattice vertex (z = 1 in Eisenstein
+--- coordinates, the apex of cell (0, 0)), and about that vertex the three
+--- families are images of each other under 120 degree rotation, so:
 ---
---- Testing corners rather than the centroid matters: point-up and point-down
---- triangles sit at different depths within a row, so no single bound on the
---- centroid separates the two orientations correctly.
+---   k1 = floor((2a - b) / 3) - 1    horizontal strips, walls 1 (max) / 4 (min)
+---   k2 = floor(-(a + b) / 3)        strips parallel to walls 0 / 3, wall 3 at max
+---   k3 = floor((2b - a) / 3)        strips parallel to walls 2 / 5, wall 5 at max
+---
+--- A hexagon of side n is exactly the cells with all three in [-n, n-1]. This
+--- is the whole of the gameplay geometry: everything with a sqrt(3) in it
+--- below is for drawing.
+function board.strips(a: integer, b: integer): integer, integer, integer
+   return idiv3(2 * a - b) - 1, idiv3(-(a + b)), idiv3(2 * b - a)
+end
+
+--- Is cell (a, b) inside the hexagon of side `n`? Exact.
 function board.contains(n: integer, a: integer, b: integer): boolean
    if not bc.is_cell(a, b) then return false end
-   local apothem = n * SQRT3 / 2 + EPS
-   for _, p in ipairs(board.corners(a, b, 1)) do
-      if math.abs(p.y) > apothem
-         or math.abs(SQRT3 / 2 * p.x + 0.5 * p.y) > apothem
-         or math.abs(SQRT3 / 2 * p.x - 0.5 * p.y) > apothem then
-         return false
-      end
-   end
-   return true
+   local k1, k2, k3 = board.strips(a, b)
+   return k1 >= -n and k1 < n
+      and k2 >= -n and k2 < n
+      and k3 >= -n and k3 < n
+end
+
+--- Which strip family, and which end of it, wall `j` sits at.
+local WALL_STRIP <const>: {integer: {integer, integer}} = {
+   [0] = { 2, -1 }, [1] = { 1, 1 }, [2] = { 3, -1 },
+   [3] = { 2, 1 }, [4] = { 1, -1 }, [5] = { 3, 1 },
+}
+
+--- How deep toward wall `j` cell (a, b) sits: an integer that grows by one per
+--- strip, largest for the cells whose edge or apex lies on the wall. Exact.
+function board.depth(j: integer, a: integer, b: integer): integer
+   local k = { board.strips(a, b) }
+   local f = WALL_STRIP[j]
+   return f[2] * k[f[1]]
 end
 
 --- Every cell of the hexagon of side `n`. There are exactly 6n^2 of them.
@@ -166,13 +210,54 @@ function board.wall_normal(j: integer): XY
    return { x = math.cos(t), y = math.sin(t) }
 end
 
---- The heading a chunk launched from wall `j` travels on, as a unit vector.
+--- The heading player `p` (1-based) fires on this turn, as a unit vector. It
+--- depends on the player's own wall `w` alone, not on the launch wall.
 ---
---- Turn A aims at wall j+2 (180 + 60j degrees), turn B at wall j-2 (240 + 60j).
+--- Turn A aims at wall w+2 (180 + 60w degrees), turn B at wall w-2 (240 + 60w).
 --- Both are multiples of 60 degrees, i.e. genuine lattice directions.
-function board.fire_dir(j: integer, turn: Turn): XY
-   local t = ((turn == "A" and 180 or 240) + 60 * j) * math.pi / 180
+function board.fire_dir(p: integer, turn: Turn): XY
+   local w = board.PLAYERS[p].wall
+   local t = ((turn == "A" and 180 or 240) + 60 * w) * math.pi / 180
    return { x = math.cos(t), y = math.sin(t) }
+end
+
+--- The six shortest orientation-preserving translations: (da + db) % 3 == 0
+--- and one side long. In board space they point at 0, 60, ... 300 degrees.
+local STEPS <const>: {AB} = {
+   { a = 1, b = 2 }, { a = 2, b = 1 }, { a = 1, b = -1 },
+   { a = -1, b = -2 }, { a = -2, b = -1 }, { a = -1, b = 1 },
+}
+
+--- The lattice step player `p`'s chunks take each tick: STEPS[i] points at
+--- 60(i - 1) degrees, and `fire_dir` is 180 + 60w (turn A) or 240 + 60w
+--- (turn B) for the player's own wall `w`, so this is a pure index lookup.
+function board.step(p: integer, turn: Turn): AB
+   local w = board.PLAYERS[p].wall
+   local i = ((turn == "A" and 3 or 4) + w) % 6 + 1
+   return { a = STEPS[i].a, b = STEPS[i].b }
+end
+
+--- The cell a triangle sweeps through when it takes `step` from (a, b): the
+--- one neighbour it shares with its destination. A rigid slide of one side
+--- passes right over that opposite-orientation triangle, so it must be free
+--- too. Exact.
+function board.swept(a: integer, b: integer, step: AB): AB
+   local dest = bc.neighbors(a + step.a, b + step.b)
+   for _, p in ipairs(bc.neighbors(a, b)) do
+      for _, q in ipairs(dest) do
+         if p.a == q.a and p.b == q.b then return { a = p.a, b = p.b } end
+      end
+   end
+   error(("(%d, %d) is not a unit step"):format(step.a, step.b))
+end
+
+--- The wall player `p`'s chunk travels toward when launched from wall `j`
+--- this turn: the opponent two walls around the sweep from their own wall,
+--- or, from the loaned wall, the neutral wall opposite their own.
+function board.target_wall(p: integer, j: integer, turn: Turn): integer
+   local w = board.PLAYERS[p].wall
+   if j ~= w then return (w + 3) % 6 end
+   return turn == "A" and (w + 2) % 6 or (w - 2) % 6
 end
 
 --- The two walls player `p` (1-based) may fire from this turn: their own, and
@@ -203,16 +288,27 @@ function board.grid_segments(n: integer, side: number): {Seg}
    return out
 end
 
---- Slide `chunk` onto the board so that it rests against wall `j`.
+local board_sets: {integer: {string: boolean}} = {}
+
+--- The cell set of the hexagon of side `n`, computed once per size.
+function board.cached_cell_set(n: integer): {string: boolean}
+   local set = board_sets[n]
+   if not set then
+      set = board.cell_set(board.cells(n))
+      board_sets[n] = set
+   end
+   return set
+end
+
+--- Every legal translation that lands `chunk` flush against wall `j`.
 ---
 --- Only translations with (da + db) % 3 == 0 preserve triangle orientation, so
 --- those are the only ones a fired chunk may use. Among the translations that
---- land the whole chunk on the board we keep the ones pressed hardest against
---- wall `j` (maximum reach along its outward normal) and pick one at random,
---- which scatters the chunk along the wall rather than always centring it.
-function board.place(n: integer, chunk: {Cell}, j: integer, rng: function(): number): {Cell}
-   local set = board.cell_set(board.cells(n))
-   local normal = board.wall_normal(j)
+--- land the whole chunk on the board without touching a `blocked` cell we keep
+--- the ones pressed hardest against wall `j` (maximum `depth`). Exact. Empty
+--- when nothing fits.
+function board.placements(n: integer, chunk: {Cell}, j: integer, blocked: {string: boolean}): {AB}
+   local set = board.cached_cell_set(n)
 
    -- Seeded from the first cell rather than math.maxinteger, which is 5.3+.
    local amin, amax = chunk[1].a, chunk[1].a
@@ -232,18 +328,18 @@ function board.place(n: integer, chunk: {Cell}, j: integer, rng: function(): num
             local ok = true
             local reach = -math.huge
             for _, c in ipairs(chunk) do
-               if not set[key(c.a + da, c.b + db)] then
+               local k = key(c.a + da, c.b + db)
+               if not set[k] or blocked[k] then
                   ok = false
                   break
                end
-               local p = board.centroid(c.a + da, c.b + db, 1)
-               local d = p.x * normal.x + p.y * normal.y
+               local d = board.depth(j, c.a + da, c.b + db)
                if d > reach then reach = d end
             end
             if ok then
-               if reach > best + EPS then
+               if reach > best then
                   best, bests = reach, { { a = da, b = db } }
-               elseif reach > best - EPS then
+               elseif reach == best then
                   bests[#bests + 1] = { a = da, b = db }
                end
             end
@@ -251,16 +347,27 @@ function board.place(n: integer, chunk: {Cell}, j: integer, rng: function(): num
       end
    end
 
-   if #bests == 0 then
-      error(("no placement of a %d-cell chunk fits against wall %d"):format(#chunk, j))
-   end
+   return bests
+end
 
-   local t = bests[math.floor(rng() * #bests) + 1]
+--- `chunk` translated by `t`.
+function board.translate(chunk: {Cell}, t: AB): {Cell}
    local out: {Cell} = {}
    for i, c in ipairs(chunk) do
       out[i] = { a = c.a + t.a, b = c.b + t.b, color = c.color }
    end
    return out
+end
+
+--- Slide `chunk` onto an empty board so that it rests against wall `j`,
+--- picking one of the flush placements at random so chunks scatter along the
+--- wall rather than always centring.
+function board.place(n: integer, chunk: {Cell}, j: integer, rng: function(): number): {Cell}
+   local bests = board.placements(n, chunk, j, {})
+   if #bests == 0 then
+      error(("no placement of a %d-cell chunk fits against wall %d"):format(#chunk, j))
+   end
+   return board.translate(chunk, bests[math.floor(rng() * #bests) + 1])
 end
 
 --- How far a ray from `p` along unit `dir` travels before leaving the hexagon.
@@ -289,7 +396,7 @@ function board.shoot(n: integer, p: integer, turn: Turn, size: integer, rng: fun
    return {
       player = p,
       wall = j,
-      dir = board.fire_dir(j, turn),
+      dir = board.fire_dir(p, turn),
       cells = board.place(n, chunk, j, rng),
    }
 end
