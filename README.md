@@ -26,8 +26,8 @@ holds 6 x 11^2 = 726 triangles. Half of them point up and half point down; every
 triangle shares each of its three edges with a triangle of the opposite
 orientation.
 
-The hexagon has six walls. The three players each defend one wall, and the
-three walls in between are neutral:
+The hexagon has six walls. The three players each defend one wall, and the three
+walls in between are neutral:
 
 ![The board: six walls, three of them defended](images/board.svg)
 
@@ -40,8 +40,7 @@ shots; it has nothing to do with the colours of the triangles.
 A blunkychunk is a connected shape made of triangles from the tiling, each
 coloured red, green or blue. No two triangles that share an edge may have the
 same colour. Chunks are grown procedurally one triangle at a time from a seed,
-so the same seed always yields the same chunk; the default size is 14
-triangles.
+so the same seed always yields the same chunk; the default size is 14 triangles.
 
 ![Ten sample blunkychunks](images/sample_blunkychunks.svg)
 
@@ -54,10 +53,10 @@ as it is on the board.
 Turns alternate between Turn A and Turn B. Together they decide which walls a
 player may fire from and which opponent their shot heads toward.
 
-| Turn | Sweep            | Fire from                                              | Shot travels toward                  |
-|------|------------------|--------------------------------------------------------|--------------------------------------|
+| Turn | Sweep            | Fire from                                                 | Shot travels toward                  |
+| ---- | ---------------- | --------------------------------------------------------- | ------------------------------------ |
 | A    | clockwise        | your own wall, or the neutral wall counterclockwise of it | the opponent clockwise of you        |
-| B    | counterclockwise | your own wall, or the neutral wall clockwise of it     | the opponent counterclockwise of you |
+| B    | counterclockwise | your own wall, or the neutral wall clockwise of it        | the opponent counterclockwise of you |
 
 On Turn A, Player 1 fires at Player 2, Player 2 at Player 3, and Player 3 at
 Player 1. Turn B reverses the whole cycle: 1 at 3, 3 at 2, 2 at 1. The neutral
@@ -72,13 +71,13 @@ dashed in their colour; the arrows show where each shot is headed.
 
 A chunk always travels straight along one of the tiling's three lattice
 directions, each of which runs parallel to one opposite pair of walls. Your
-heading is fixed by the turn alone, whichever of your two walls you launch
-from: on Turn A Player 1 fires northwest, Player 2 east and Player 3
-southwest; on Turn B Player 1 fires northeast, Player 2 southeast and Player 3
-west. Fired from your own wall that heading reaches the opponent two walls
-around the sweep. Fired from the wall on loan to you, the same heading carries
-the chunk to the neutral wall opposite your own instead, so a loaned shot can
-never score a hit: it is there to block.
+heading is fixed by the turn alone, whichever of your two walls you launch from:
+on Turn A Player 1 fires northwest, Player 2 east and Player 3 southwest; on
+Turn B Player 1 fires northeast, Player 2 southeast and Player 3 west. Fired
+from your own wall that heading reaches the opponent two walls around the sweep.
+Fired from the wall on loan to you, the same heading carries the chunk to the
+neutral wall opposite your own instead, so a loaned shot can never score a hit:
+it is there to block.
 
 ## Placement
 
@@ -105,3 +104,35 @@ opponent's wall and your opponent loses 1 HP and you go up one if you were the
 one to have originally fired that blunkychunk. You win if both opponents have HP
 <= 0. Players can go negative, but "come back to life" as they are still playing
 the game. As long as one other opponent is still in the game.
+
+## Ideas
+
+- Rotations!
+- Bigger board
+- Lean into the tetris-like quality and control the pieces as they go? If we do
+  this then probably the pieces only need to be launched from exactly your side
+- Alternatively, fire and forget where you can have multiple pieces in flight at
+  once
+- Defenses = singleton triangles of your color that your blunkychunks can pass
+  through, but others cannot (without clearing them properly). You start the
+  game with some and periodically get more that you can place directly onto the
+  board on your turn (on your part of the playing field)
+- Outline of pieces and where they will land before you fire
+- Leaning further into the rotation quality with changing colors
+- Having your player color mean something (so your blunkychunks are weighted to
+  have more of other people's )
+- If a blunkychunk "splits" perhaps it goes in the two other 60deg different
+  directions. So if the blunkychunk was originally going east and it splits then
+  the upper half starts going northeast and the lower half southeast.
+- Points system? Combos for bigger groups and/or perfect fits?
+- Theme related to elements with red = fire, earth = green, blue = water. These
+  could rotate?
+- Monks? Trunks? Junk? Sunk?
+
+## Observations
+
+- This could be an odds vs. evens thing, but sometimes blunkychunks stop moving
+  with a gap in between them because there's no way of resolving the concurrent
+  move without them being on top of one another. This is highly unsatisfying
+- The neutral walls are unsatisfying. Some better way of dealing with those.
+  Maybe you're defending 2 walls. Then
