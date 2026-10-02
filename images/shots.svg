@@ -5176,21 +5176,25 @@
     <line x1="360.00" y1="553.65" x2="370.00" y2="536.33"/>
     <line x1="370.00" y1="536.33" x2="350.00" y2="536.33"/>
   </g>
-  <g fill="#1f2933" fill-opacity="0.18" stroke="none">
-    <polygon points="290.00,501.69 300.00,484.37 280.00,484.37" />
-    <polygon points="290.00,501.69 280.00,484.37 270.00,501.69" />
-    <polygon points="310.00,501.69 300.00,484.37 290.00,501.69" />
-    <polygon points="310.00,501.69 320.00,484.37 300.00,484.37" />
-    <polygon points="330.00,501.69 320.00,484.37 310.00,501.69" />
-    <polygon points="270.00,501.69 280.00,484.37 260.00,484.37" />
-    <polygon points="330.00,501.69 340.00,484.37 320.00,484.37" />
-    <polygon points="320.00,519.01 330.00,501.69 310.00,501.69" />
-    <polygon points="340.00,519.01 330.00,501.69 320.00,519.01" />
-    <polygon points="280.00,519.01 290.00,501.69 270.00,501.69" />
-    <polygon points="270.00,501.69 260.00,484.37 250.00,501.69" />
-    <polygon points="280.00,484.37 270.00,467.05 260.00,484.37" />
-    <polygon points="340.00,484.37 330.00,467.05 320.00,484.37" />
-    <polygon points="350.00,501.69 340.00,484.37 330.00,501.69" />
+  <g fill-opacity="0.3" stroke="none">
+    <polygon points="290.00,501.69 300.00,484.37 280.00,484.37" fill="#3f68c4"/>
+    <polygon points="290.00,501.69 280.00,484.37 270.00,501.69" fill="#d6494f"/>
+    <polygon points="310.00,501.69 300.00,484.37 290.00,501.69" fill="#3f9a55"/>
+    <polygon points="310.00,501.69 320.00,484.37 300.00,484.37" fill="#3f68c4"/>
+    <polygon points="330.00,501.69 320.00,484.37 310.00,501.69" fill="#3f9a55"/>
+    <polygon points="270.00,501.69 280.00,484.37 260.00,484.37" fill="#3f68c4"/>
+    <polygon points="330.00,501.69 340.00,484.37 320.00,484.37" fill="#d6494f"/>
+    <polygon points="320.00,519.01 330.00,501.69 310.00,501.69" fill="#3f68c4"/>
+    <polygon points="340.00,519.01 330.00,501.69 320.00,519.01" fill="#d6494f"/>
+    <polygon points="280.00,519.01 290.00,501.69 270.00,501.69" fill="#3f9a55"/>
+    <polygon points="270.00,501.69 260.00,484.37 250.00,501.69" fill="#3f9a55"/>
+    <polygon points="280.00,484.37 270.00,467.05 260.00,484.37" fill="#3f9a55"/>
+    <polygon points="340.00,484.37 330.00,467.05 320.00,484.37" fill="#3f68c4"/>
+    <polygon points="350.00,501.69 340.00,484.37 330.00,501.69" fill="#3f68c4"/>
+  </g>
+  <g stroke="#ffffff" stroke-width="0.9">
+  </g>
+  <g stroke="#ffffff" stroke-width="2" stroke-linecap="round">
   </g>
   <g stroke="#1f2933" stroke-width="2.6" stroke-dasharray="5 3" fill="none" stroke-linecap="round">
     <line x1="300.00" y1="484.37" x2="280.00" y2="484.37"/>
@@ -5249,21 +5253,25 @@
     <polygon points="616.00,494.68 630.00,487.88 630.00,501.48" stroke="none"/>
   </g>
   <text x="302.14" y="450.68" font-family="Helvetica, Arial, sans-serif" fill="#1f2933" font-size="13" font-weight="600" text-anchor="middle" stroke="#ffffff" stroke-width="4" paint-order="stroke">lands clear</text>
-  <g fill="#c0392b" fill-opacity="0.18" stroke="none">
-    <polygon points="480.00,207.24 490.00,189.92 470.00,189.92" />
-    <polygon points="490.00,189.92 480.00,172.60 470.00,189.92" />
-    <polygon points="500.00,207.24 490.00,189.92 480.00,207.24" />
-    <polygon points="470.00,189.92 480.00,172.60 460.00,172.60" />
-    <polygon points="470.00,189.92 460.00,172.60 450.00,189.92" />
-    <polygon points="480.00,172.60 470.00,155.28 460.00,172.60" />
-    <polygon points="490.00,224.56 500.00,207.24 480.00,207.24" />
-    <polygon points="480.00,207.24 470.00,189.92 460.00,207.24" />
-    <polygon points="470.00,224.56 480.00,207.24 460.00,207.24" />
-    <polygon points="470.00,224.56 460.00,207.24 450.00,224.56" />
-    <polygon points="490.00,224.56 480.00,207.24 470.00,224.56" />
-    <polygon points="500.00,207.24 510.00,189.92 490.00,189.92" />
-    <polygon points="480.00,241.88 490.00,224.56 470.00,224.56" />
-    <polygon points="460.00,207.24 470.00,189.92 450.00,189.92" />
+  <g fill-opacity="0.3" stroke="none">
+    <polygon points="480.00,207.24 490.00,189.92 470.00,189.92" fill="#3f68c4"/>
+    <polygon points="490.00,189.92 480.00,172.60 470.00,189.92" fill="#3f9a55"/>
+    <polygon points="500.00,207.24 490.00,189.92 480.00,207.24" fill="#d6494f"/>
+    <polygon points="470.00,189.92 480.00,172.60 460.00,172.60" fill="#d6494f"/>
+    <polygon points="470.00,189.92 460.00,172.60 450.00,189.92" fill="#3f9a55"/>
+    <polygon points="480.00,172.60 470.00,155.28 460.00,172.60" fill="#3f9a55"/>
+    <polygon points="490.00,224.56 500.00,207.24 480.00,207.24" fill="#3f68c4"/>
+    <polygon points="480.00,207.24 470.00,189.92 460.00,207.24" fill="#3f9a55"/>
+    <polygon points="470.00,224.56 480.00,207.24 460.00,207.24" fill="#3f68c4"/>
+    <polygon points="470.00,224.56 460.00,207.24 450.00,224.56" fill="#3f9a55"/>
+    <polygon points="490.00,224.56 480.00,207.24 470.00,224.56" fill="#d6494f"/>
+    <polygon points="500.00,207.24 510.00,189.92 490.00,189.92" fill="#3f9a55"/>
+    <polygon points="480.00,241.88 490.00,224.56 470.00,224.56" fill="#3f9a55"/>
+    <polygon points="460.00,207.24 470.00,189.92 450.00,189.92" fill="#d6494f"/>
+  </g>
+  <g stroke="#ffffff" stroke-width="0.9">
+  </g>
+  <g stroke="#ffffff" stroke-width="2" stroke-linecap="round">
   </g>
   <g stroke="#c0392b" stroke-width="2.6" stroke-dasharray="5 3" fill="none" stroke-linecap="round">
     <line x1="480.00" y1="172.60" x2="490.00" y2="189.92"/>
@@ -5314,21 +5322,25 @@
     <polygon points="304.00,199.82 290.00,206.62 290.00,193.02" stroke="none"/>
   </g>
   <text x="475.71" y="251.82" font-family="Helvetica, Arial, sans-serif" fill="#c0392b" font-size="13" font-weight="600" text-anchor="middle" stroke="#ffffff" stroke-width="4" paint-order="stroke">friendly fire</text>
-  <g fill="#d99a00" fill-opacity="0.18" stroke="none">
-    <polygon points="280.00,657.58 290.00,640.26 270.00,640.26" />
-    <polygon points="300.00,657.58 290.00,640.26 280.00,657.58" />
-    <polygon points="290.00,640.26 280.00,622.94 270.00,640.26" />
-    <polygon points="290.00,674.90 300.00,657.58 280.00,657.58" />
-    <polygon points="290.00,674.90 280.00,657.58 270.00,674.90" />
-    <polygon points="290.00,640.26 300.00,622.94 280.00,622.94" />
-    <polygon points="280.00,692.22 290.00,674.90 270.00,674.90" />
-    <polygon points="270.00,640.26 280.00,622.94 260.00,622.94" />
-    <polygon points="280.00,692.22 270.00,674.90 260.00,692.22" />
-    <polygon points="300.00,657.58 310.00,640.26 290.00,640.26" />
-    <polygon points="310.00,640.26 300.00,622.94 290.00,640.26" />
-    <polygon points="270.00,709.54 280.00,692.22 260.00,692.22" />
-    <polygon points="300.00,622.94 290.00,605.62 280.00,622.94" />
-    <polygon points="310.00,640.26 320.00,622.94 300.00,622.94" />
+  <g fill-opacity="0.3" stroke="none">
+    <polygon points="280.00,657.58 290.00,640.26 270.00,640.26" fill="#d6494f"/>
+    <polygon points="300.00,657.58 290.00,640.26 280.00,657.58" fill="#3f9a55"/>
+    <polygon points="290.00,640.26 280.00,622.94 270.00,640.26" fill="#3f68c4"/>
+    <polygon points="290.00,674.90 300.00,657.58 280.00,657.58" fill="#d6494f"/>
+    <polygon points="290.00,674.90 280.00,657.58 270.00,674.90" fill="#3f68c4"/>
+    <polygon points="290.00,640.26 300.00,622.94 280.00,622.94" fill="#3f9a55"/>
+    <polygon points="280.00,692.22 290.00,674.90 270.00,674.90" fill="#3f9a55"/>
+    <polygon points="270.00,640.26 280.00,622.94 260.00,622.94" fill="#d6494f"/>
+    <polygon points="280.00,692.22 270.00,674.90 260.00,692.22" fill="#3f68c4"/>
+    <polygon points="300.00,657.58 310.00,640.26 290.00,640.26" fill="#3f68c4"/>
+    <polygon points="310.00,640.26 300.00,622.94 290.00,640.26" fill="#d6494f"/>
+    <polygon points="270.00,709.54 280.00,692.22 260.00,692.22" fill="#d6494f"/>
+    <polygon points="300.00,622.94 290.00,605.62 280.00,622.94" fill="#3f68c4"/>
+    <polygon points="310.00,640.26 320.00,622.94 300.00,622.94" fill="#3f68c4"/>
+  </g>
+  <g stroke="#ffffff" stroke-width="0.9">
+  </g>
+  <g stroke="#ffffff" stroke-width="2" stroke-linecap="round">
   </g>
   <g stroke="#d99a00" stroke-width="2.6" stroke-dasharray="5 3" fill="none" stroke-linecap="round">
     <line x1="280.00" y1="657.58" x2="270.00" y2="640.26"/>

@@ -1,5 +1,7 @@
---- Blunkychunks in LOVE: you play Player 1 (the southwest home) against two
---- random bots, or with --bots three bots play each other.
+--- Blunkychunks in LOVE: you play Player 1 (the southwest home) on the
+--- keyboard against two random bots, or with --bots three bots play each
+--- other. A gamepad joins by pressing Start, taking over the first bot's home,
+--- and Back hands it back; several can play at once (see controls.tl).
 ---
 ---   make run                          # build and launch on the 22-8 board
 ---   make run DIAMETER=12 NOTCH=5      # any other notched board
@@ -9,14 +11,15 @@
 ---   make run ARGS="--size 8"          # chunks of 8 triangles
 ---   make run ARGS="--shot out.png"    # screenshot after a few seconds, then quit
 ---
---- Play is continuous: chunks slide one step per tick while the shot clock
---- counts down, and each time it runs out every player's aim fires at once.
---- Keys are listed on screen (see `controls`).
+--- Play is continuous: chunks slide one step per tick while every player's
+--- shot clock counts down. The clocks are staggered, so they run out in turn,
+--- and each time one does that player's aim fires. Keys and buttons are
+--- listed on screen (see `legend`).
 
 local bc = require("blunkychunks")
 local board = require("board")
 local sim = require("sim")
-local bots = require("bots")
+local controls = require("controls")
 local draw = require("draw")
 
 local record Fonts
@@ -26,129 +29,29 @@ local record Fonts
    title: love.Font
 end
 
---- The human's aim. `want` is the spot they last chose, as the Eisenstein sum
---- of its triangles' coordinates over `count` triangles, so the aim stays put
---- (as near as it can) while chunks move and while they rotate.
-local record Aim
-   slot: integer
-   turn: integer -- rotation, 0..5 sixths of a turn counterclockwise
-   heading: integer -- which of the player's three headings, 1..3
-   want: bc.AB
-   count: integer
-   spots: {board.Spot} -- legal spots for this chunk and rotation, along the back wall
-   pick: integer -- the spot in use, or nil when the chunk fits nowhere
-   shape: board.Shape
-   cells: {board.Tri} -- the aim's triangles (or where it would be, if it fits nowhere)
-   ghost: sim.Ghost
-end
-
 local record Game
    state: sim.State
    over: boolean
-   clock: number -- seconds left on the shot clock
+   clocks: {number} -- per player: seconds left on their shot clock
    tick_timer: number
    step_seconds: number
    seed: integer
    effects: {draw.Effect}
-   bot_shots: {sim.Shot}
+   seats: {controls.Seat} -- per player: who plays them
    shot_path: string
    shot_after: number
-   human: boolean
-   aim: Aim
 end
 
 local SHOT_SECONDS <const> = 8.0
 local STEP_SECONDS <const> = 0.28
-local HUMAN <const> = 1
 
 local view: draw.View
 local fonts: Fonts
 local game: Game
 local shot_seconds = SHOT_SECONDS
-local human_mode = true
+local keyboard = true -- whether the keyboard starts out playing Player 1
 local board_n, board_r = 11, 8
 local chunk_size = 14
-
-local function skip(g: Game): {integer: boolean}
-   return g.human and { [HUMAN] = true } or nil
-end
-
---- Sums of the Eisenstein coordinates of `cells`.
-local function centre(B: board.Board, cells: {board.Tri}): bc.AB
-   local a, b = 0, 0
-   for _, t in ipairs(cells) do a, b = a + B.a[t.i], b + B.b[t.i] end
-   return { a = a, b = b }
-end
-
---- Squared distance (times count^2) between two centroids given as sums, by
---- the Eisenstein norm N(x + yw) = x^2 - xy + y^2. Exact.
-local function far(u: bc.AB, nu: integer, v: bc.AB, nv: integer): integer
-   local x, y = u.a * nv - v.a * nu, u.b * nv - v.b * nu
-   return x * x - x * y + y * y
-end
-
---- Put `spots` in order along the back wall, counterclockwise as drawn round
---- the board's centre z = 1. Every home lies within a 120 degree sector of
---- it, so the sign of the cross product orders them. Exact.
-local function along_wall(B: board.Board, shape: board.Shape, spots: {board.Spot}): {board.Spot}
-   local k = #shape.cells
-   local key: {board.Spot: bc.AB} = {}
-   for _, s in ipairs(spots) do
-      local c = centre(B, board.place(B, shape, s.x, s.y))
-      key[s] = { a = c.a - k, b = c.b }
-   end
-   table.sort(spots, function(p: board.Spot, q: board.Spot): boolean
-      local u, v = key[p], key[q]
-      local cross = u.a * v.b - u.b * v.a
-      if cross ~= 0 then return cross > 0 end
-      if p.y ~= q.y then return p.y < q.y end
-      return p.x < q.x
-   end)
-   return spots
-end
-
---- Recompute the human's aim against the board as it is now.
-local function refresh_aim(g: Game)
-   local aim = g.aim
-   if not aim or not g.state.players[HUMAN].alive then return end
-   local B = g.state.board
-   local chunk = g.state.players[HUMAN].bank[aim.slot]
-   aim.shape = board.shape(B, bc.rotate(chunk, aim.turn))
-   aim.spots = along_wall(B, aim.shape, sim.placements(g.state, HUMAN, aim.shape))
-   aim.pick = nil
-   local best = math.huge
-   for i, s in ipairs(aim.spots) do
-      local d = aim.want and far(centre(B, board.place(B, aim.shape, s.x, s.y)), #aim.shape.cells, aim.want, aim.count)
-         or math.abs(i - (#aim.spots + 1) / 2)
-      if d < best then best, aim.pick = d, i end
-   end
-   local h = board.HEADINGS[HUMAN][aim.heading]
-   if aim.pick then
-      local s = aim.spots[aim.pick]
-      aim.cells = board.place(B, aim.shape, s.x, s.y)
-      aim.ghost = sim.ghost(g.state, HUMAN, aim.cells, h)
-      if not aim.want then aim.want, aim.count = centre(B, aim.cells), #aim.cells end
-   else
-      aim.ghost = nil
-   end
-end
-
---- Choose spot `i` of the current list as the one to hold on to.
-local function choose_spot(g: Game, i: integer)
-   local aim = g.aim
-   local s = aim.spots[i]
-   if not s then return end
-   local cells = board.place(g.state.board, aim.shape, s.x, s.y)
-   aim.want, aim.count = centre(g.state.board, cells), #cells
-   refresh_aim(g)
-end
-
---- The human's shot as aimed, or nil when it fits nowhere.
-local function human_shot(g: Game): sim.Shot
-   local aim = g.aim
-   if not g.human or not aim or not aim.pick then return nil end
-   return { player = HUMAN, slot = aim.slot, heading = board.HEADINGS[HUMAN][aim.heading], cells = aim.cells }
-end
 
 local function effect(g: Game, i: integer, text: string, hex: string, life: number)
    local B = g.state.board
@@ -176,46 +79,78 @@ local function do_tick(g: Game)
    for _, t in ipairs(r.hits) do effect(g, t.i, "!", draw.DANGER, 1.2) end
    for _, p in ipairs(r.out) do out_effect(g, p) end
    check_over(g)
-   if not g.over then refresh_aim(g) end
+   if not g.over then
+      for _, seat in ipairs(g.seats) do controls.update(g.state, seat) end
+   end
 end
 
-local function lock_in(g: Game)
-   local shots = bots.refresh(g.state, g.bot_shots, skip(g))
-   local mine = human_shot(g)
-   if mine then shots[#shots + 1] = mine end
-   local r = sim.lock_in(g.state, shots)
+--- Player `p`'s shot clock ran out: fire their seat's aim.
+local function lock_in(g: Game, p: integer)
+   local s = g.state
+   local seat = g.seats[p]
+   local r = sim.lock_in(s, p, controls.shot(s, seat))
    for _, t in ipairs(r.cleared) do effect(g, t.i, "x", bc.FILL[t.color], 0.7) end
-   for _, p in ipairs(r.out) do out_effect(g, p) end
-   g.clock = shot_seconds
+   if r.out then out_effect(g, p) end
    check_over(g)
    if g.over then return end
-   g.bot_shots = bots.plan(g.state, skip(g))
-   if g.aim and g.aim.want and mine then
-      -- The chunk just fired; aim the next one from the same place.
-      g.aim.want, g.aim.count = centre(g.state.board, mine.cells), #mine.cells
-   end
-   refresh_aim(g)
+   controls.fired(s, seat, r)
+   for _, other in ipairs(g.seats) do controls.update(s, other) end
 end
 
-local function new_game(seed: integer): Game
+--- Run the shot clocks down by `dt`, firing each one that runs out in turn.
+local function run_clocks(g: Game, dt: number)
+   for _, p in ipairs(sim.run_down(g.state, g.clocks, dt, shot_seconds)) do
+      if g.over then return end
+      lock_in(g, p)
+   end
+end
+
+--- The live player whose shot clock runs out next.
+local function soonest(g: Game): integer
+   local best: integer
+   for p, pl in ipairs(g.state.players) do
+      if pl.alive and (not best or g.clocks[p] < g.clocks[best]) then best = p end
+   end
+   return best
+end
+
+--- Fire now: skip the clocks ahead to when player `p`'s runs out (if `p`
+--- is nil or out, the next one to), so any that would run out first fire first.
+local function skip_ahead(g: Game, p?: integer)
+   if not (p and g.state.players[p].alive) then p = soonest(g) end
+   if p then run_clocks(g, g.clocks[p]) end
+end
+
+--- Who plays each player, as `seats` (or, for a first match, the keyboard
+--- on Player 1 unless it's all bots) left them.
+local function seat_all(state: sim.State, seats?: {controls.Seat}): {controls.Seat}
+   local out: {controls.Seat} = {}
+   for p = 1, #state.players do
+      local was = seats and seats[p]
+      if was and controls.is_human(was) then
+         out[p] = controls.human(state, p, was.kind, was.pad)
+      elseif not seats and keyboard and p == 1 then
+         out[p] = controls.human(state, p, "keys")
+      else
+         out[p] = controls.bot(state, p)
+      end
+   end
+   return out
+end
+
+local function new_game(seed: integer, seats?: {controls.Seat}): Game
    local B = board.new(board_n, board_r)
    view = draw.layout(B, 24, 92, 1440 - 24 - 470, 900 - 92 - 112)
    local g: Game = {
       state = sim.new(B, chunk_size, bc.seeded_random(seed)),
       over = false,
-      clock = shot_seconds,
+      clocks = sim.clocks(shot_seconds),
       tick_timer = 0,
       step_seconds = STEP_SECONDS,
       seed = seed,
       effects = {},
-      bot_shots = {},
-      human = human_mode,
    }
-   g.bot_shots = bots.plan(g.state, skip(g))
-   if g.human then
-      g.aim = { slot = 1, turn = 0, heading = 2 }
-      refresh_aim(g)
-   end
+   g.seats = seat_all(g.state, seats)
    return g
 end
 
@@ -238,7 +173,7 @@ function love.load(args: {string})
    chunk_size = math.floor(tonumber(flag(args, "--size") or "") or chunk_size)
    local seed = tonumber(flag(args, "--seed") or "") or os.time()
    if flag(args, "--fast") then shot_seconds = 2.0 end
-   if flag(args, "--bots") then human_mode = false end
+   if flag(args, "--bots") then keyboard = false end
    game = new_game(math.floor(seed))
    local shot = flag(args, "--shot")
    if shot then
@@ -255,8 +190,7 @@ function love.update(dt: number)
    end
 
    if not g.over then
-      g.clock = g.clock - dt
-      if g.clock <= 0 then lock_in(g) end
+      run_clocks(g, dt)
       g.tick_timer = g.tick_timer + dt
       while not g.over and g.tick_timer >= g.step_seconds do
          g.tick_timer = g.tick_timer - g.step_seconds
@@ -274,27 +208,61 @@ function love.update(dt: number)
    end
 end
 
---- Every key the game listens to, grouped for the on-screen legend.
-local function controls(g: Game): {draw.KeyGroup}
-   local groups: {draw.KeyGroup} = {}
-   if g.human then
-      groups[#groups + 1] = {
-         title = "You (" .. board.PLAYERS[HUMAN].name .. ")",
-         keys = {
-            { "1 2 3", "pick chunk" },
-            { "Q / E", "rotate" },
-            { "Left Right / A D", "slide along your back wall" },
-            { "Up Down / Tab", "heading" },
-            { "Space / Enter", "fire now" },
-         },
-      }
-   else
-      groups[#groups + 1] = { title = "Bots", keys = { { "Space", "fire now" } } }
+--- The seat played on `kind` of controller (and `pad`, for a gamepad), if any.
+local function seat_of(g: Game, kind: controls.Kind, pad?: love.Joystick): controls.Seat
+   for _, seat in ipairs(g.seats) do
+      if seat.kind == kind and seat.pad == pad then return seat end
    end
-   groups[#groups + 1] = {
-      title = "Game",
-      keys = { { "+ / -", "slide speed" }, { "R", "new match" }, { "Esc", "quit" } },
-   }
+   return nil
+end
+
+--- The first bot seat a newcomer could take: one still in, or any once
+--- the match is over.
+local function free_seat(g: Game): controls.Seat
+   for p, seat in ipairs(g.seats) do
+      if seat.kind == "bot" and (g.over or g.state.players[p].alive) then return seat end
+   end
+   return nil
+end
+
+--- Gamepads plugged in but not playing.
+local function idle_pads(): integer
+   local n = 0
+   for _, pad in ipairs(love.joystick.getJoysticks()) do
+      if pad:isGamepad() and not seat_of(game, "pad", pad) then n = n + 1 end
+   end
+   return n
+end
+
+--- Every key and button the game listens to, grouped for the on-screen legend:
+--- one group per kind of controller in play, then how to join, then the
+--- game's own keys.
+local function legend(g: Game): {draw.KeyGroup}
+   local groups: {draw.KeyGroup} = {}
+   for _, kind in ipairs({ "keys", "pad" } as {controls.Kind}) do
+      local who: {integer} = {}
+      local label: string
+      for p, seat in ipairs(g.seats) do
+         if seat.kind == kind then who[#who + 1], label = p, controls.label(seat) end
+      end
+      if #who > 0 then
+         local names = #who == 1 and board.PLAYERS[who[1]].name or "Players " .. table.concat(who, ", ")
+         groups[#groups + 1] = {
+            title = ("%s  -  %s"):format(names, label),
+            color = #who == 1 and board.PLAYERS[who[1]].color or nil,
+            keys = controls.legend(kind),
+         }
+      end
+   end
+   local free = free_seat(g)
+   if free then
+      local who = board.PLAYERS[free.player].name
+      local hint = idle_pads() > 0 and ("join as " .. who) or ("plug one in and press Start to join as " .. who)
+      groups[#groups + 1] = { title = "Controller", keys = { { "Start", hint } } }
+   end
+   local game_keys: {{string, string}} = { { "+ / -", "slide speed" }, { "R", "new match" }, { "Esc", "quit" } }
+   if not seat_of(g, "keys") then table.insert(game_keys, 1, { "Space", "skip to the next shot" }) end
+   groups[#groups + 1] = { title = "Game", keys = game_keys }
    return groups
 end
 
@@ -316,11 +284,13 @@ function love.draw()
       draw.chunk(view, chunk.cells, ox, oy, 1, board.PLAYERS[chunk.owner].color)
    end
 
-   -- Aims: the bots' faintly, the human's with its heading and ghost.
+   -- Aims: the bots' faintly, the humans' with their headings and ghosts.
    local aims: {integer: draw.Aim} = {}
    if not g.over then
-      for _, shot in ipairs(g.bot_shots) do
-         if s.players[shot.player].alive then
+      for p, seat in ipairs(g.seats) do
+         local shot = seat.plan
+         local aim = seat.aim
+         if shot and s.players[p].alive then
             local hex = board.PLAYERS[shot.player].color
             draw.chunk(view, shot.cells, 0, 0, 0.35, hex)
             draw.arrow(view, shot.cells, shot.heading, hex, 0.5)
@@ -330,20 +300,19 @@ function love.draw()
                   and sim.ghost(s, shot.player, shot.cells, shot.heading).look or nil,
             }
          end
-      end
-      local aim = g.aim
-      if g.human and aim and s.players[HUMAN].alive then
-         local hex = board.PLAYERS[HUMAN].color
-         local h = board.HEADINGS[HUMAN][aim.heading]
-         if aim.pick then
-            draw.ghost(view, aim.ghost.cells, aim.ghost.look)
-            draw.chunk(view, aim.cells, 0, 0, 0.85, hex)
-            if aim.ghost.look == "friendly" then draw.grey(view, aim.cells) end
-            draw.arrow(view, aim.cells, h, aim.ghost.look == "clear" and hex or draw.look_color(aim.ghost.look), 1)
-            aims[HUMAN] = { slot = aim.slot, heading = h, look = aim.ghost.look }
-         else
-            if aim.cells then draw.misfit(view, aim.cells) end
-            aims[HUMAN] = { slot = aim.slot, heading = h }
+         if aim and s.players[p].alive then
+            local hex = board.PLAYERS[p].color
+            local h = controls.heading(seat)
+            if aim.pick then
+               draw.ghost(view, aim.ghost)
+               draw.chunk(view, aim.cells, 0, 0, 0.85, hex)
+               if aim.ghost.look == "friendly" then draw.grey(view, aim.cells) end
+               draw.arrow(view, aim.cells, h, aim.ghost.look == "clear" and hex or draw.look_color(aim.ghost.look), 1)
+               aims[p] = { slot = aim.slot, heading = h, look = aim.ghost.look }
+            else
+               if aim.cells then draw.misfit(view, aim.cells) end
+               aims[p] = { slot = aim.slot, heading = h }
+            end
          end
       end
    end
@@ -355,19 +324,34 @@ function love.draw()
    local rr, gg, bb = draw.rgb(draw.INK)
    love.graphics.setColor(rr, gg, bb)
    local alive = sim.alive(s)
-   love.graphics.print(g.over and "Match over" or ("Shot clock %.1f s"):format(math.max(0, g.clock)), 24, 18)
+   local title = "Match over"
+   local humans: {integer} = {}
+   for p, seat in ipairs(g.seats) do
+      if controls.is_human(seat) and s.players[p].alive then humans[#humans + 1] = p end
+   end
+   if not g.over and #humans == 1 then
+      title = ("Your shot clock %.1f s"):format(math.max(0, g.clocks[humans[1]]))
+   elseif not g.over then
+      local p = soonest(g)
+      title = ("%s shoots in %.1f s"):format(board.PLAYERS[p].name, math.max(0, g.clocks[p]))
+   end
+   love.graphics.print(title, 24, 18)
    love.graphics.setFont(fonts.body)
    rr, gg, bb = draw.rgb(draw.MUTED)
    love.graphics.setColor(rr, gg, bb)
    love.graphics.print(("%d chunk%s on the board  -  %d player%s in  -  %d-%d board"):format(
       #s.chunks, #s.chunks == 1 and "" or "s", alive, alive == 1 and "" or "s", 2 * B.n, B.r), 24, 54)
 
-   draw.controls(controls(g), 24, 900 - 96, 940, fonts.small)
+   draw.controls(legend(g), 24, 900 - 12, 940, fonts.small)
    love.graphics.setColor(rr, gg, bb)
    love.graphics.setFont(fonts.small)
    love.graphics.print(("seed %d   step %.2fs"):format(g.seed, g.step_seconds), 1440 - 180, 900 - 24)
 
-   draw.panels(s, aims, 1440 - 446, 92, 422, fonts.small, fonts.big, g.human and HUMAN or nil)
+   local tags: {draw.Seat} = {}
+   for p, seat in ipairs(g.seats) do
+      tags[p] = { label = controls.label(seat), slots = controls.slot_keys(seat.kind) }
+   end
+   draw.panels(s, aims, g.clocks, tags, 1440 - 446, 92, 422, fonts.small, fonts.big)
 
    if g.over then
       love.graphics.setColor(1, 1, 1, 0.75)
@@ -390,50 +374,58 @@ function love.draw()
    end
 end
 
---- Aiming keys for the human. Returns true if the key was handled.
-local function human_key(g: Game, key: string): boolean
-   local aim = g.aim
-   if not g.human or g.over or not aim or not g.state.players[HUMAN].alive then return false end
-   local slot = tonumber(key) or tonumber(key:match("^kp(%d)$") or "")
-   if slot and slot >= 1 and slot <= sim.BANK then
-      aim.slot = math.floor(slot)
-      refresh_aim(g)
-   elseif key == "q" then
-      aim.turn = (aim.turn + 1) % 6
-      refresh_aim(g)
-   elseif key == "e" then
-      aim.turn = (aim.turn + 5) % 6
-      refresh_aim(g)
-   elseif key == "left" or key == "a" then
-      if aim.pick then choose_spot(g, math.max(1, aim.pick - 1)) end
-   elseif key == "right" or key == "d" then
-      if aim.pick then choose_spot(g, math.min(#aim.spots, aim.pick + 1)) end
-   elseif key == "up" or key == "tab" then
-      aim.heading = aim.heading % 3 + 1
-      refresh_aim(g)
-   elseif key == "down" then
-      aim.heading = (aim.heading + 1) % 3 + 1
-      refresh_aim(g)
-   elseif key == "return" or key == "kpenter" then
-      lock_in(g)
+--- `action` from `seat`'s controller: aim, or fire now.
+local function seat_action(g: Game, seat: controls.Seat, action: controls.Action)
+   if g.over then return end
+   if action == "fire" then
+      skip_ahead(g, seat.player)
    else
-      return false
+      controls.act(g.state, seat, action)
    end
-   return true
 end
 
 function love.keypressed(key: string)
    local g = game
-   if human_key(g, key) then return end
-   if key == "escape" then
+   local seat = seat_of(g, "keys")
+   local action = controls.key_action(key)
+   if seat and action then
+      seat_action(g, seat, action)
+   elseif key == "escape" then
       love.event.quit()
-   elseif key == "space" and not g.over then
-      lock_in(g)
+   elseif (key == "space" or key == "return") and not g.over then
+      skip_ahead(g)
    elseif key == "r" then
-      game = new_game(g.seed + 1)
+      game = new_game(g.seed + 1, g.seats)
    elseif key == "=" or key == "+" or key == "kp+" then
       g.step_seconds = math.max(0.04, g.step_seconds / 1.5)
    elseif key == "-" or key == "kp-" then
       g.step_seconds = math.min(2, g.step_seconds * 1.5)
    end
+end
+
+function love.gamepadpressed(pad: love.Joystick, button: string)
+   local g = game
+   local seat = seat_of(g, "pad", pad)
+   local action = controls.button_action(button)
+   if not seat then
+      local free = action == "join" and free_seat(g)
+      if free then g.seats[free.player] = controls.human(g.state, free.player, "pad", pad) end
+   elseif action == "leave" then
+      g.seats[seat.player] = controls.bot(g.state, seat.player)
+   elseif action then
+      seat_action(g, seat, action)
+   end
+end
+
+function love.gamepadaxis(pad: love.Joystick, axis: string, value: number)
+   local seat = seat_of(game, "pad", pad)
+   if not seat then return end
+   local action = controls.axis_action(seat, axis, value)
+   if action then seat_action(game, seat, action) end
+end
+
+--- An unplugged gamepad's player goes back to a bot.
+function love.joystickremoved(pad: love.Joystick)
+   local seat = seat_of(game, "pad", pad)
+   if seat then game.seats[seat.player] = controls.bot(game.state, seat.player) end
 end

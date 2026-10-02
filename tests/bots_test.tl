@@ -35,33 +35,34 @@ function T.plan_skips_the_human_and_players_who_are_out()
    local s = fresh()
    s.players[2].alive = false
    local shots = bots.plan(s, { [1] = true })
-   A.eq(#shots, 1, "one bot left to plan")
-   A.eq(shots[1].player, 3, "Player 3")
+   A.eq(shots[1], nil, "not the human")
+   A.eq(shots[2], nil, "not a player who is out")
+   A.eq(shots[3].player, 3, "Player 3 planned")
 end
 
-function T.refresh_keeps_legal_aims_and_replaces_stale_ones()
+function T.refresh_keeps_a_legal_aim_and_replaces_a_stale_one()
    local s = fresh()
    local shots = bots.plan(s)
-   A.eq(#shots, 3, "three plans")
    local keep, stale = shots[1], shots[3]
    sim.add_chunk(s, 3, board.HEADINGS[3][2], { { i = stale.cells[1].i, color = "red" } })
-   local again = bots.refresh(s, shots)
-   A.eq(#again, 3, "still three")
-   A.eq(again[1], keep, "the legal aim is kept as it was")
-   A.truthy(again[3] ~= stale, "the stale aim is replaced")
-   A.truthy(sim.legal(s, 3, again[3].cells), "by a legal one")
+   A.eq(bots.refresh(s, 1, keep), keep, "the legal aim is kept as it was")
+   local again = bots.refresh(s, 3, stale)
+   A.truthy(again ~= stale, "the stale aim is replaced")
+   A.truthy(sim.legal(s, 3, again.cells), "by a legal one")
+   A.truthy(sim.legal(s, 2, bots.refresh(s, 2, nil).cells), "and a missing one chosen afresh")
 end
 
 --- On a board whose homes are smaller than a chunk nothing ever fits, so the
---- first shot clock knocks everyone out together: a draw, not a crash.
-function T.a_home_too_small_for_any_chunk_ends_in_a_draw()
+--- players go out in turn as their clocks run out, and the last one's left
+--- standing: no crash.
+function T.a_home_too_small_for_any_chunk_leaves_the_last_clock_standing()
    local s = sim.new(board.new(1, 1), 14, bc.seeded_random(1))
    A.eq(#s.board.homes[1], 4, "four triangles per home")
-   A.eq(#bots.plan(s), 0, "no bot finds a shot")
-   local r = sim.lock_in(s, bots.refresh(s, {}))
-   A.eq(#r.out, 3, "all out at once")
+   A.eq(next(bots.plan(s)), nil, "no bot finds a shot")
+   A.truthy(sim.lock_in(s, 1, bots.refresh(s, 1, nil)).out, "Player 1 out first")
+   A.truthy(sim.lock_in(s, 2, bots.refresh(s, 2, nil)).out, "then Player 2")
    A.truthy(sim.over(s), "over")
-   A.eq(sim.winner(s), nil, "a draw")
+   A.eq(sim.winner(s), 3, "Player 3 left standing")
 end
 
 return T

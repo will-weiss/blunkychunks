@@ -3,7 +3,8 @@
 ---
 ---   tl run tests/soak.tl -- --seeds 20 --diameter 22 --notch 8 --size 14
 ---
---- Each shot clock is 8 s of 0.28 s ticks, as in the game.
+--- As in the game, ticks are 0.28 s apart and each player's 8 s shot clock
+--- is staggered a third of a clock behind the one before.
 
 local bc = require("blunkychunks")
 local board = require("board")
@@ -22,8 +23,9 @@ end
 local n, r = board.options(argv)
 local SEEDS = num("seeds", 5)
 local SIZE = num("size", 14)
-local TICKS_PER_CLOCK <const> = 28
-local MAX_CLOCKS <const> = 400
+local STEP <const> = 0.28
+local PERIOD <const> = 8.0
+local MAX_TICKS <const> = 12000
 
 local function check(state: sim.State, where: string)
    local B = state.board
@@ -58,23 +60,23 @@ end
 local outs: {string: integer} = {}
 for seed = 1, SEEDS do
    local state = sim.new(board.new(n, r), SIZE, bc.seeded_random(seed))
-   local clocks, ticks, clears, hits = 0, 0, 0, 0
+   local fired, ticks, clears, hits = 0, 0, 0, 0
+   local clocks = sim.clocks(PERIOD)
    local shots = bots.plan(state)
-   while not sim.over(state) and clocks < MAX_CLOCKS do
-      for t = 1, TICKS_PER_CLOCK do
-         local res = sim.tick(state)
-         ticks = ticks + 1
-         clears = clears + #res.cleared
-         hits = hits + #res.hits
-         check(state, ("seed %d clock %d tick %d"):format(seed, clocks, t))
-         if sim.over(state) then break end
-      end
-      if sim.over(state) then break end
-      local res = sim.lock_in(state, bots.refresh(state, shots))
+   while not sim.over(state) and ticks < MAX_TICKS do
+      local res = sim.tick(state)
+      ticks = ticks + 1
       clears = clears + #res.cleared
-      check(state, ("seed %d clock %d lock-in"):format(seed, clocks))
-      clocks = clocks + 1
-      shots = bots.plan(state)
+      hits = hits + #res.hits
+      check(state, ("seed %d tick %d"):format(seed, ticks))
+      for _, p in ipairs(sim.run_down(state, clocks, STEP, PERIOD)) do
+         if sim.over(state) then break end
+         local lock = sim.lock_in(state, p, bots.refresh(state, p, shots[p]))
+         if lock.fired then fired = fired + 1 end
+         clears = clears + #lock.cleared
+         check(state, ("seed %d tick %d Player %d's lock-in"):format(seed, ticks, p))
+         shots[p] = state.players[p].alive and bots.choose(state, p) or nil
+      end
    end
    local how: {string} = {}
    for p, pl in ipairs(state.players) do
@@ -82,8 +84,8 @@ for seed = 1, SEEDS do
       if not pl.alive then outs[pl.out] = (outs[pl.out] or 0) + 1 end
    end
    local winner = sim.winner(state)
-   print(("seed %2d: %3d clocks, %5d ticks, %4d clears, %d back-wall hits, %-8s %-8s %-8s %s"):format(
-      seed, clocks, ticks, clears, hits, how[1], how[2], how[3],
+   print(("seed %2d: %3d shots, %5d ticks, %4d clears, %d back-wall hits, %-8s %-8s %-8s %s"):format(
+      seed, fired, ticks, clears, hits, how[1], how[2], how[3],
       sim.over(state) and (winner and ("Player " .. winner .. " wins") or "draw") or "unfinished"))
 end
 print(("outs: %d stuck, %d friendly"):format(outs.stuck or 0, outs.friendly or 0))

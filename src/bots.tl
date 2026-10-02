@@ -60,33 +60,22 @@ function bots.choose(state: sim.State, p: integer): sim.Shot
    return best
 end
 
---- Every live bot's shot for this shot clock, leaving out players in `skip`
---- (e.g. a human). Bots with nothing that fits have no shot.
-function bots.plan(state: sim.State, skip?: {integer: boolean}): {sim.Shot}
-   local shots: {sim.Shot} = {}
+--- Every live bot's shot, by player, leaving out players in `skip` (e.g. a
+--- human). Bots with nothing that fits have no shot.
+function bots.plan(state: sim.State, skip?: {integer: boolean}): {integer: sim.Shot}
+   local shots: {integer: sim.Shot} = {}
    for p, pl in ipairs(state.players) do
-      if pl.alive and not (skip and skip[p]) then
-         local shot = bots.choose(state, p)
-         if shot then shots[#shots + 1] = shot end
-      end
+      if pl.alive and not (skip and skip[p]) then shots[p] = bots.choose(state, p) end
    end
    return shots
 end
 
---- `shots` again at lock-in: chunks have moved since they were planned, so a
---- bot whose aim no longer fits (or who had none) chooses afresh.
-function bots.refresh(state: sim.State, shots: {sim.Shot}, skip?: {integer: boolean}): {sim.Shot}
-   local mine: {integer: sim.Shot} = {}
-   for _, shot in ipairs(shots) do mine[shot.player] = shot end
-   local out: {sim.Shot} = {}
-   for p, pl in ipairs(state.players) do
-      if pl.alive and not (skip and skip[p]) then
-         local shot = mine[p]
-         if not (shot and sim.legal(state, p, shot.cells)) then shot = bots.choose(state, p) end
-         if shot then out[#out + 1] = shot end
-      end
-   end
-   return out
+--- Bot `p`'s planned `shot` again as their shot clock runs out: chunks have
+--- moved since it was planned, so if it no longer fits (or there was none)
+--- the bot chooses afresh.
+function bots.refresh(state: sim.State, p: integer, shot: sim.Shot): sim.Shot
+   if shot and sim.legal(state, p, shot.cells) then return shot end
+   return bots.choose(state, p)
 end
 
 return bots

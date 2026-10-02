@@ -31,7 +31,15 @@ local record draw
    --- A titled row of { key, what it does } pairs for the on-screen legend.
    record KeyGroup
       title: string
+      color: string -- the title's colour, INK if nil
       keys: {{string, string}}
+   end
+
+   --- Who is at a player's panel: `label` names their controller, and
+   --- `slots`, for a human, what picks each bank slot.
+   record Seat
+      label: string
+      slots: {string}
    end
 
    --- What a player is aiming this shot clock, for the panels.
@@ -237,16 +245,34 @@ function draw.look_color(look: sim.Look): string
    return look == "clear" and INK or look == "home" and AMBER or DANGER
 end
 
---- Where a ghost lands: a light wash and an outline, coloured by its look.
-function draw.ghost(v: View, cells: {integer}, look: sim.Look)
-   local hex = draw.look_color(look)
-   local tris: {Tri} = {}
-   for k, i in ipairs(cells) do tris[k] = { i = i, color = "red" } end
-   color(hex, 0.22)
-   for _, t in ipairs(tris) do tri_fill(v, t.i, 0, 0) end
-   color(hex, 0.95)
+--- Where a ghost lands: its triangles in faded colours, outlined in its look's
+--- colour. Its hits, the triangles that clear against a same-coloured one, are
+--- in full colour and crossed out, where they clear.
+function draw.ghost(v: View, ghost: sim.Ghost)
+   local B = v.board
+   local all: {Tri} = {}
+   for _, t in ipairs(ghost.cells) do
+      color(bc.FILL[t.color], 0.3)
+      tri_fill(v, t.i, 0, 0)
+      all[#all + 1] = t
+   end
+   for _, t in ipairs(ghost.hits) do
+      color(bc.FILL[t.color])
+      tri_fill(v, t.i, 0, 0)
+      all[#all + 1] = t
+   end
+   love.graphics.setColor(1, 1, 1)
+   love.graphics.setLineWidth(2)
+   local r = v.side * 0.16
+   for _, t in ipairs(ghost.hits) do
+      local p = board.centroid(B.a[t.i], B.b[t.i], v.side)
+      local x, y = v.cx + p.x, v.cy + p.y
+      love.graphics.line(x - r, y - r, x + r, y + r)
+      love.graphics.line(x - r, y + r, x + r, y - r)
+   end
+   color(draw.look_color(ghost.look), 0.95)
    love.graphics.setLineWidth(2.5)
-   silhouette(v, tris, 0, 0)
+   silhouette(v, all, 0, 0)
 end
 
 --- Grey `cells` out, for an aim that would be friendly fire.
@@ -331,15 +357,18 @@ local OUT_NOTE <const>: {sim.Out: string} = {
    friendly = "out: friendly fire",
 }
 
---- Player panels down the right-hand side: name, status, bank and aim.
---- `aims` holds what each player is aiming (bots and human alike); `human`,
---- if set, is the player at the keyboard.
-function draw.panels(state: sim.State, aims: {integer: draw.Aim}, x: number, y: number, w: number,
-                     small: love.Font, big: love.Font, human?: integer)
+--- Player panels down the right-hand side: name, shot clock or status, bank
+--- and aim. `aims` holds what each player is aiming (bots and human alike),
+--- `clocks` the seconds left on each one's shot clock, `seats` who is
+--- playing each one.
+function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {number}, seats: {draw.Seat},
+                     x: number, y: number, w: number, small: love.Font, big: love.Font)
    local h = 228
    for p, pl in ipairs(board.PLAYERS) do
       local top = y + (p - 1) * (h + 14)
       local me = state.players[p]
+      local seat = seats[p]
+      local human = seat and seat.slots ~= nil
       color(pl.color, me.alive and 0.10 or 0.04)
       love.graphics.rectangle("fill", x, top, w, h, 8, 8)
       color(pl.color, me.alive and 1 or 0.4)
@@ -349,13 +378,23 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, x: number, y: 
       love.graphics.setFont(big)
       color(pl.color)
       local home = ({ "southwest", "northwest", "east" })[p]
-      love.graphics.print(("%s%s"):format(pl.name, p == human and " (you)" or ""), x + 14, top + 10)
+      love.graphics.print(pl.name, x + 14, top + 10)
       love.graphics.setFont(small)
       color(MUTED)
-      love.graphics.print(home, x + 14, top + 38)
-      local status = me.alive and "in" or OUT_NOTE[me.out]
-      color(me.alive and INK or DANGER)
-      love.graphics.print(status, x + w - 14 - small:getWidth(status), top + 16)
+      love.graphics.print(seat and ("%s  -  %s"):format(home, seat.label) or home, x + 14, top + 38)
+      if me.alive then
+         local left = ("%.1f s"):format(math.max(0, clocks[p]))
+         love.graphics.setFont(big)
+         color(INK)
+         love.graphics.print(left, x + w - 14 - big:getWidth(left), top + 10)
+         love.graphics.setFont(small)
+         color(MUTED)
+         love.graphics.print("shot clock", x + w - 14 - small:getWidth("shot clock"), top + 38)
+      else
+         local status = OUT_NOTE[me.out]
+         color(DANGER)
+         love.graphics.print(status, x + w - 14 - small:getWidth(status), top + 16)
+      end
 
       local aim = aims[p]
       local slot_w = (w - 28) / 3
@@ -368,9 +407,9 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, x: number, y: 
          end
          love.graphics.rectangle("fill", bx + 2, by, slot_w - 4, 104, 6, 6)
          draw.thumb(me.bank[i], bx + slot_w / 2, by + 52, 9, me.alive and 1 or 0.35)
-         if p == human then
+         if human then
             color(aim and aim.slot == i and pl.color or MUTED)
-            love.graphics.print(tostring(i), bx + 8, by + 4)
+            love.graphics.print(seat.slots[i] or tostring(i), bx + 8, by + 4)
          end
       end
 
@@ -381,8 +420,8 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, x: number, y: 
             note = "nothing fits"
             hue = DANGER
          elseif not aim.look then
-            note = p == human and "this chunk doesn't fit like this: rotate or pick another" or "re-aiming"
-            hue = p == human and DANGER or MUTED
+            note = human and "this chunk doesn't fit like this: rotate or pick another" or "re-aiming"
+            hue = human and DANGER or MUTED
          else
             note = ("aiming %s, %s"):format(board.HEADING_NAMES[aim.heading], LOOK_NOTE[aim.look])
             hue = aim.look == "clear" and INK or aim.look == "home" and AMBER or DANGER
@@ -394,34 +433,53 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, x: number, y: 
 end
 
 --- The key legend: each group starts a new line with its title, then key
---- chips with their descriptions, wrapping within `w`.
-function draw.controls(groups: {draw.KeyGroup}, x: number, y: number, w: number, font: love.Font)
+--- chips with their descriptions, wrapping within `w`. The legend sits on
+--- `bottom`, growing upward as it needs more lines.
+function draw.controls(groups: {draw.KeyGroup}, x: number, bottom: number, w: number, font: love.Font)
    love.graphics.setFont(font)
    local line_h = font:getHeight() + 10
-   local cy = y
-   for _, group in ipairs(groups) do
-      color(INK)
-      love.graphics.print(group.title, x, cy + 3)
-      local indent = x + 110
-      local cx = indent
+   local indent = 0.0
+   for _, group in ipairs(groups) do indent = math.max(indent, font:getWidth(group.title) + 16) end
+
+   -- Lay the chips out first, to know how many lines they take.
+   local record Chip
+      key: string
+      what: string
+      x: number
+      line: integer
+   end
+   local chips: {Chip} = {}
+   local starts: {integer} = {}
+   local line = 0
+   for g, group in ipairs(groups) do
+      local cx = x + indent
+      starts[g] = line
       for _, k in ipairs(group.keys) do
-         local kw = font:getWidth(k[1]) + 12
-         local item = kw + 6 + font:getWidth(k[2]) + 18
-         if cx > indent and cx + item > x + w then
-            cx, cy = indent, cy + line_h
-         end
-         color("#ffffff")
-         love.graphics.rectangle("fill", cx, cy, kw, font:getHeight() + 6, 4, 4)
-         color(GRID)
-         love.graphics.setLineWidth(1)
-         love.graphics.rectangle("line", cx, cy, kw, font:getHeight() + 6, 4, 4)
-         color(INK)
-         love.graphics.print(k[1], cx + 6, cy + 3)
-         color(MUTED)
-         love.graphics.print(k[2], cx + kw + 6, cy + 3)
+         local item = font:getWidth(k[1]) + 12 + 6 + font:getWidth(k[2]) + 18
+         if cx > x + indent and cx + item > x + w then cx, line = x + indent, line + 1 end
+         chips[#chips + 1] = { key = k[1], what = k[2], x = cx, line = line }
          cx = cx + item
       end
-      cy = cy + line_h
+      line = line + 1
+   end
+
+   local top = bottom - line * line_h
+   for g, group in ipairs(groups) do
+      color(group.color or INK)
+      love.graphics.print(group.title, x, top + starts[g] * line_h + 3)
+   end
+   for _, c in ipairs(chips) do
+      local cy = top + c.line * line_h
+      local kw = font:getWidth(c.key) + 12
+      color("#ffffff")
+      love.graphics.rectangle("fill", c.x, cy, kw, font:getHeight() + 6, 4, 4)
+      color(GRID)
+      love.graphics.setLineWidth(1)
+      love.graphics.rectangle("line", c.x, cy, kw, font:getHeight() + 6, 4, 4)
+      color(INK)
+      love.graphics.print(c.key, c.x + 6, cy + 3)
+      color(MUTED)
+      love.graphics.print(c.what, c.x + kw + 6, cy + 3)
    end
 end
 

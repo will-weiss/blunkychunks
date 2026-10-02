@@ -53,7 +53,8 @@ only slides, and a slide keeps every triangle's orientation.
 
 ## Aiming
 
-Each player has a bank of three chunks. On every shot clock you choose:
+Each player has a bank of three chunks. Before your shot clock runs out you
+choose:
 
 - a chunk from your bank;
 - one of its six rotations;
@@ -76,11 +77,13 @@ edge at its end, which is your own back wall.
 
 ## The shot clock
 
-Play is continuous. The shot clock runs for 8 seconds, and when it runs out
-every player's aim fires at once and the next clock starts straight away.
-Chunks already on the board keep sliding the whole time. Aims never collide,
-because each lies in its own player's home. When a chunk is fired its slot in
-your bank is refilled with a fresh one.
+Play is continuous. Each player has their own shot clock of 8 seconds: when
+yours runs out your aim fires, and your clock starts again straight away. The
+clocks are staggered a third of a clock apart, so they run out in turn, Player
+1's, then Player 2's, then Player 3's, and someone fires every 2⅔ seconds.
+Everyone's first clock is the full 8 seconds, plus 2⅔ for each player before
+them. Chunks already on the board keep sliding the whole time. When a chunk is
+fired its slot in your bank is refilled with a fresh one.
 
 ## Sliding
 
@@ -94,7 +97,14 @@ is blocked by:
 - the edge of the board.
 
 Your own dashed line never blocks your chunks. Chunks moving the same way don't
-block each other, so a convoy moves together. A blocked chunk keeps its heading
+block each other, so a convoy moves together.
+
+When chunks moving different ways would step into the same space, landing on or
+passing over the same triangle, and nothing else stops them, the one fired
+first takes its step and the others wait. A convoy goes as its earliest-fired
+chunk, and the pieces of a chunk that splits count as fired when it was.
+
+A blocked chunk keeps its heading
 and moves on as soon as the way clears, so when part of a pile clears, whatever
 was stacked behind it slides on.
 
@@ -107,10 +117,18 @@ the same heading.
 
 ## The ghost
 
-Before you fire you see a ghost of where your aim will come to rest. It slides
-against the chunks currently at rest, and looks straight through chunks still
-in flight and through the other players' aims, which can't be known yet. Its
-colour says what will happen:
+Before you fire you see a ghost of where your aim will come to rest, in its own
+colours, faded. It slides against the chunks currently at rest, and looks
+straight through chunks still in flight and through the other players' aims,
+which can't be known yet.
+
+On the way it clears just as the real chunk would. A **hit** is a triangle that
+meets one of the same colour at rest, as it's fired or after any step: the
+ghost shows it in full colour and crossed out, where the two meet. Whatever is
+left slides on without it, in pieces if the hit cut it in two, and the ghost
+shows where each piece comes to rest.
+
+Its outline's colour says what will happen:
 
 - **Ink:** it lands clear of your home.
 - **Amber:** it lands with part of it still in your home, because a pile is in
@@ -124,7 +142,7 @@ colour says what will happen:
 
 You are out when either of these happens:
 
-- the shot clock runs out and you have no legal aim, because you ran out of
+- your shot clock runs out and you have no legal aim, because you ran out of
   time or nothing fits anywhere in your home;
 - one of your triangles is stopped by your own back wall.
 
@@ -149,6 +167,7 @@ The game is written in Teal and runs in LÖVE 11.4.
 | `make test`                   | the rules engine's tests                               |
 | `make soak`                   | whole bot matches played headless, checking the engine |
 | `make images`                 | redraw the figures in this README                      |
+| `make dist`                   | package standalone builds for macOS, Windows and Linux into `dist/` (`make mac`, `windows`, `linux` or `love` for one) |
 
 | Key                | Does                                |
 | ------------------ | ----------------------------------- |
@@ -156,10 +175,24 @@ The game is written in Teal and runs in LÖVE 11.4.
 | `Q` / `E`          | rotate counterclockwise / clockwise |
 | `←` `→` or `A` `D` | slide the chunk along your back wall |
 | `↑` `↓` or `Tab`   | change heading                      |
-| `Space` / `Enter`  | fire now, without waiting for the clock |
+| `Space` / `Enter`  | fire now: every clock skips ahead to when yours runs out, so any due sooner fire first (watching `make bots`, `Space` skips to the next shot) |
 | `+` / `-`          | slide faster / slower               |
 | `R`                | new match                           |
 | `Esc`              | quit                                |
+
+Gamepads can play too, as many as there are bots to take over: press `Start`
+on one to take the first bot's home, and `Back` (or unplugging it) hands that
+home back to a bot. The legend at the bottom of the screen lists the keys and
+buttons for every controller in play.
+
+| Button               | Does                                 |
+| -------------------- | ------------------------------------ |
+| `X` `Y` `B`          | pick a chunk from your bank          |
+| `LB` / `RB`          | rotate counterclockwise / clockwise  |
+| D-pad or stick ← →   | slide the chunk along your back wall |
+| D-pad or stick ↑ ↓   | change heading                       |
+| `A`                  | fire now                             |
+| `Start` / `Back`     | join / leave                         |
 
 ## Ideas
 
@@ -179,9 +212,3 @@ The game is written in Teal and runs in LÖVE 11.4.
 - Theme related to elements with red = fire, earth = green, blue = water. These
   could rotate?
 - Monks? Trunks? Junk? Sunk?
-
-## Observations
-
-- This could be an odds vs. evens thing, but sometimes blunkychunks stop moving
-  with a gap in between them because there's no way of resolving the concurrent
-  move without them being on top of one another. This is highly unsatisfying

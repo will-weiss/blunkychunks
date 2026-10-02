@@ -3,18 +3,21 @@
 ---
 --- A match is a `State`: the board, the chunks on it with their headings, an
 --- occupancy matrix, and each player's bank and status. Play is continuous and
---- the caller runs two clocks at once:
+--- the caller runs the clocks:
 ---
 ---   * every tick, `tick` slides each chunk that can move by one step;
----   * every shot clock, `lock_in` fires each live player's aim, and knocks
----     out anyone without a legal one.
+---   * each player has their own shot clock, staggered so they run out in
+---     turn (`clocks`, `run_down`); when one does, `lock_in` fires that
+---     player's aim, or knocks them out if they have no legal one.
 ---
 --- A step is blocked by a wall, by another player's home (their dashed line),
 --- or by a triangle that isn't moving the same way. Your own dashed line never
---- blocks you. A triangle stopped by a wall while still in its owner's home has
---- hit their back wall, and the owner is out. After every tick and every
---- lock-in, two same-coloured triangles of different chunks that share an edge
---- both clear, and chunks that fall apart split, keeping heading and owner.
+--- blocks you. When chunks moving different ways would step into the same
+--- cell, the one fired first takes its step and the others wait. A triangle
+--- stopped by a wall while still in its owner's home has hit their back wall,
+--- and the owner is out. After every tick and every lock-in, two same-coloured
+--- triangles of different chunks that share an edge both clear, and chunks
+--- that fall apart split, keeping heading, owner and when they were fired.
 
 local bc = require("blunkychunks")
 local board = require("board")
@@ -35,6 +38,7 @@ local record sim
       id: integer
       owner: integer
       heading: integer
+      fired: integer -- fire order, lower first; the pieces of a split keep their chunk's
       cells: {board.Tri}
       moved: boolean -- moved on the last tick, for animation
       flying: boolean -- fired since, or moved on, the last tick; ghosts look through it
@@ -56,7 +60,8 @@ local record sim
    end
 
    record Ghost
-      cells: {integer}
+      cells: {board.Tri} -- where what's left of the shot comes to rest
+      hits: {board.Tri} -- the shot's triangles that clear, where they clear
       look: Look
    end
 
@@ -68,8 +73,8 @@ local record sim
    end
 
    record LockResult
-      fired: {Shot}
-      out: {integer} -- players with no legal aim
+      fired: Shot -- nil when there was no legal aim
+      out: boolean -- knocked out for having no legal aim
       cleared: {board.Tri}
    end
 
@@ -125,6 +130,7 @@ local function new_chunk(state: State, owner: integer, heading: integer): Chunk
       id = state.next_id,
       owner = owner,
       heading = heading,
+      fired = state.next_id,
       cells = {},
       moved = false,
       flying = true,
@@ -192,16 +198,14 @@ local function prune(state: State)
    state.chunks = kept
 end
 
---- Split `chunk` into edge-connected pieces. The first keeps the chunk's
---- identity; each other one becomes a new chunk with the same owner, heading
---- and flags.
-local function split(state: State, chunk: Chunk)
-   local near = state.board.near
+--- `cells` in edge-connected pieces.
+local function connected(B: board.Board, cells: {Tri}): {{Tri}}
+   local near = B.near
    local pool: {integer: Tri} = {}
-   for _, c in ipairs(chunk.cells) do pool[c.i] = c end
+   for _, c in ipairs(cells) do pool[c.i] = c end
 
    local pieces: {{Tri}} = {}
-   for _, start in ipairs(chunk.cells) do
+   for _, start in ipairs(cells) do
       if pool[start.i] then
          local piece: {Tri} = {}
          local queue: {Tri} = { start }
@@ -220,12 +224,19 @@ local function split(state: State, chunk: Chunk)
          pieces[#pieces + 1] = piece
       end
    end
+   return pieces
+end
 
+--- Split `chunk` into edge-connected pieces. The first keeps the chunk's
+--- identity; each other one becomes a new chunk with the same owner, heading,
+--- fire order and flags.
+local function split(state: State, chunk: Chunk)
+   local pieces = connected(state.board, chunk.cells)
    if #pieces <= 1 then return end
    chunk.cells = pieces[1]
    for k = 2, #pieces do
       local piece = new_chunk(state, chunk.owner, chunk.heading)
-      piece.moved, piece.flying = chunk.moved, chunk.flying
+      piece.fired, piece.moved, piece.flying = chunk.fired, chunk.moved, chunk.flying
       piece.cells = pieces[k]
       for _, c in ipairs(piece.cells) do state.occ[c.i] = piece.id end
    end
@@ -283,7 +294,7 @@ function sim.tick(state: State): sim.TickResult
 
    -- Walls and dashed lines never move, so each chunk checks them once and
    -- keeps the list of cells it would pass over or land on.
-   local moving: {integer: boolean} = {}
+   local free: {Chunk} = {}
    local sweeps: {integer: {integer}} = {}
    local hit_wall: {integer: boolean} = {}
    for _, chunk in ipairs(state.chunks) do
@@ -291,17 +302,17 @@ function sim.tick(state: State): sim.TickResult
       local step, pass = B.step[chunk.heading], B.pass[chunk.heading]
       local live = state.players[chunk.owner].alive
       local list: {integer} = {}
-      local free = true
+      local clear = true
       for _, c in ipairs(chunk.cells) do
          local here = kind[c.i]
          local hit = false
          for _, j in ipairs({ c.i + pass[board.facing(c.i)], c.i + step }) do
             local k = kind[j]
             if k == WALL then
-               free = false
+               clear = false
                if here == chunk.owner and live then hit = true end
             elseif k ~= MIDDLE and k ~= chunk.owner then
-               free = false
+               clear = false
             else
                list[#list + 1] = j
             end
@@ -311,40 +322,56 @@ function sim.tick(state: State): sim.TickResult
             hit_wall[chunk.owner] = true
          end
       end
-      if free then
-         moving[chunk.id] = true
+      if clear then
+         free[#free + 1] = chunk
          sweeps[chunk.id] = list
       end
    end
 
-   -- Fixpoint: block anything whose sweep meets a triangle that is standing
-   -- still or moving another way, or crosses the sweep of such a chunk.
-   local changed = true
-   while changed do
-      changed = false
-      local claims: {integer: Chunk} = {}
-      for _, chunk in ipairs(state.chunks) do
-         if moving[chunk.id] then
-            local blocked = false
-            for _, j in ipairs(sweeps[chunk.id]) do
+   -- In the order they were fired, each chunk moves if it can, together with
+   -- the chunks in its way moving the same way (and those in theirs): a convoy
+   -- goes when its earliest chunk does. It can't if any of them meets a
+   -- triangle that is staying put or moving another way, or a cell an earlier
+   -- chunk has already claimed moving another way.
+   table.sort(free, function(x: Chunk, y: Chunk): boolean
+      if x.fired ~= y.fired then return x.fired < y.fired end
+      return x.id < y.id
+   end)
+   local moving: {integer: boolean} = {}
+   local stuck: {integer: boolean} = {}
+   local claims: {integer: integer} = {} -- cell -> the heading moving through it
+   for _, chunk in ipairs(free) do
+      if not moving[chunk.id] and not stuck[chunk.id] then
+         local h = chunk.heading
+         local convoy: {integer} = { chunk.id }
+         local seen: {integer: boolean} = { [chunk.id] = true }
+         local ok = true
+         local k = 1
+         while ok and k <= #convoy do
+            for _, j in ipairs(sweeps[convoy[k]]) do
+               if claims[j] and claims[j] ~= h then
+                  ok = false
+                  break
+               end
                local other = occ[j]
-               if other ~= 0 and other ~= chunk.id
-                  and (not moving[other] or state.by_id[other].heading ~= chunk.heading) then
-                  blocked = true
-                  break
+               if other ~= 0 and not seen[other] then
+                  if not sweeps[other] or stuck[other] or state.by_id[other].heading ~= h then
+                     ok = false
+                     break
+                  end
+                  seen[other] = true
+                  if not moving[other] then convoy[#convoy + 1] = other end
                end
-               local rival = claims[j]
-               if rival and rival ~= chunk and rival.heading ~= chunk.heading then
-                  blocked = true
-                  moving[rival.id] = nil
-                  break
-               end
-               claims[j] = chunk
             end
-            if blocked then
-               moving[chunk.id] = nil
-               changed = true
+            k = k + 1
+         end
+         if ok then
+            for _, id in ipairs(convoy) do
+               moving[id] = true
+               for _, j in ipairs(sweeps[id]) do claims[j] = h end
             end
+         else
+            stuck[chunk.id] = true
          end
       end
    end
@@ -426,15 +453,21 @@ function sim.can_head(p: integer, h: integer): boolean
    return false
 end
 
---- Where `cells`, fired by `p` on `heading`, would come to rest: slid against
---- walls, other players' homes and chunks at rest, looking straight through
---- chunks in flight (and through the other players' aims, which aren't on the
---- board yet). Its look is "friendly" if any triangle can't leave p's home on
---- this heading -- pure geometry, so it holds whatever is in the way --
---- otherwise "home" if it lands with part in p's home, otherwise "clear".
+--- Where `cells`, fired by `p` on `heading`, would come to rest, played out
+--- against the board as it stands: chunks at rest stay put, and chunks in
+--- flight (and the other players' aims, which aren't on the board yet) are
+--- looked straight through. The shot slides against walls, other players'
+--- homes and chunks at rest. Wherever one of its triangles meets a
+--- same-coloured one at rest, as it's fired or after any step, both clear: a
+--- hit. What's left falls into pieces that slide on independently, as they
+--- would for real.
+---
+--- Its look is "friendly" if any triangle can't leave p's home on this
+--- heading -- pure geometry, so it holds whatever is in the way -- otherwise
+--- "home" if anything comes to rest in p's home, otherwise "clear".
 function sim.ghost(state: State, p: integer, cells: {Tri}, heading: integer): sim.Ghost
    local B = state.board
-   local kind, occ, by_id = B.kind, state.occ, state.by_id
+   local kind, near, occ, paint, by_id = B.kind, B.near, state.occ, state.paint, state.by_id
    local step, pass = B.step[heading], B.pass[heading]
 
    local friendly = false
@@ -450,60 +483,160 @@ function sim.ghost(state: State, p: integer, cells: {Tri}, heading: integer): si
       if friendly then break end
    end
 
-   local at: {integer} = {}
-   for k, c in ipairs(cells) do at[k] = c.i end
+   -- The board as the ghost sees it: triangles at rest, less those it clears.
+   local gone: {integer: boolean} = {}
+   local function rest(j: integer): boolean
+      local id = occ[j]
+      return id ~= 0 and not by_id[id].flying and not gone[j]
+   end
    local function stops(j: integer): boolean
       local k = kind[j]
-      if k == WALL or (k ~= MIDDLE and k ~= p) then return true end
-      local id = occ[j]
-      return id ~= 0 and not by_id[id].flying
-   end
-   while true do
-      local blocked = false
-      for _, i in ipairs(at) do
-         if stops(i + pass[board.facing(i)]) or stops(i + step) then
-            blocked = true
-            break
-         end
-      end
-      if blocked then break end
-      for k = 1, #at do at[k] = at[k] + step end
+      return k == WALL or (k ~= MIDDLE and k ~= p) or rest(j)
    end
 
-   local look: sim.Look = "clear"
-   if friendly then
-      look = "friendly"
-   else
-      for _, i in ipairs(at) do
-         if kind[i] == p then look = "home" end
+   local shot: {Tri} = {}
+   for k, c in ipairs(cells) do shot[k] = { i = c.i, color = c.color } end
+   local pieces: {{Tri}} = #shot > 0 and { shot } or {}
+   local hits: {Tri} = {}
+   -- The shot's triangles by where they are, and which piece each is in.
+   local mine: {integer: Tri}
+   local piece_of: {integer: integer}
+   local function index()
+      mine, piece_of = {}, {}
+      for n, piece in ipairs(pieces) do
+         for _, t in ipairs(piece) do mine[t.i], piece_of[t.i] = t, n end
       end
    end
-   return { cells = at, look = look }
+
+   while true do
+      -- Hits, against triangles at rest or another piece of the shot.
+      index()
+      local hit: {Tri: boolean} = {}
+      local cleared: {integer} = {}
+      for n, piece in ipairs(pieces) do
+         for _, t in ipairs(piece) do
+            for _, d in ipairs(near[board.facing(t.i)]) do
+               local j = t.i + d
+               local m = piece_of[j]
+               if m then
+                  if m ~= n and mine[j].color == t.color then hit[t] = true end
+               elseif rest(j) and paint[j] == bc.CODE[t.color] then
+                  hit[t] = true
+                  cleared[#cleared + 1] = j
+               end
+            end
+         end
+      end
+      if next(hit) then
+         for _, j in ipairs(cleared) do gone[j] = true end
+         local kept: {{Tri}} = {}
+         for _, piece in ipairs(pieces) do
+            local left: {Tri} = {}
+            for _, t in ipairs(piece) do
+               if hit[t] then
+                  hits[#hits + 1] = { i = t.i, color = t.color }
+               else
+                  left[#left + 1] = t
+               end
+            end
+            if #left == #piece then
+               kept[#kept + 1] = piece
+            else
+               for _, part in ipairs(connected(B, left)) do kept[#kept + 1] = part end
+            end
+         end
+         pieces = kept
+         index()
+      end
+
+      -- Every piece that can takes a step, all at once. A piece is held by
+      -- whatever would stop a chunk, or by a piece of the shot that is held.
+      local moving: {integer: boolean} = {}
+      for n, piece in ipairs(pieces) do
+         moving[n] = true
+         for _, t in ipairs(piece) do
+            if stops(t.i + pass[board.facing(t.i)]) or stops(t.i + step) then
+               moving[n] = nil
+               break
+            end
+         end
+      end
+      local changed = true
+      while changed do
+         changed = false
+         for n, piece in ipairs(pieces) do
+            if moving[n] then
+               for _, t in ipairs(piece) do
+                  local a, b = piece_of[t.i + pass[board.facing(t.i)]], piece_of[t.i + step]
+                  if (a and not moving[a]) or (b and not moving[b]) then
+                     moving[n] = nil
+                     changed = true
+                     break
+                  end
+               end
+            end
+         end
+      end
+      if not next(moving) then break end
+      for n in pairs(moving) do
+         for _, t in ipairs(pieces[n]) do t.i = t.i + step end
+      end
+   end
+
+   local landed: {Tri} = {}
+   local look: sim.Look = friendly and "friendly" or "clear"
+   for _, piece in ipairs(pieces) do
+      for _, t in ipairs(piece) do
+         landed[#landed + 1] = t
+         if look == "clear" and kind[t.i] == p then look = "home" end
+      end
+   end
+   return { cells = landed, hits = hits, look = look }
 end
 
---- The shot clock ran out: every live player's aim fires together. Anyone
---- alive without a legal aim (none in `shots`, a placement that no longer
---- fits, or a heading that isn't theirs) is out. Aims are all checked before
---- any is placed; they can't collide, as each lies in its own home.
-function sim.lock_in(state: State, shots: {sim.Shot}): sim.LockResult
-   local result: sim.LockResult = { fired = {}, out = {}, cleared = {} }
-   local aim: {integer: sim.Shot} = {}
-   for _, shot in ipairs(shots) do
-      if not aim[shot.player] then aim[shot.player] = shot end
+--- Player `p`'s shot clock ran out: their aim `shot` fires. If they have no
+--- legal aim (no shot, a placement that no longer fits, or a heading that
+--- isn't theirs) they are out instead. A player already out is left alone.
+function sim.lock_in(state: State, p: integer, shot: sim.Shot): sim.LockResult
+   local pl = state.players[p]
+   if not pl.alive then return { out = false, cleared = {} } end
+   if shot and shot.player == p and sim.can_head(p, shot.heading) and sim.legal(state, p, shot.cells) then
+      return { fired = shot, out = false, cleared = sim.fire(state, { shot }) }
    end
+   pl.alive, pl.out = false, "stuck"
+   return { out = true, cleared = {} }
+end
+
+--- Everyone's shot clocks at the start of a match, in seconds left. Each
+--- clock runs for `period`, staggered so they run out in turn, Player 1's
+--- first, a third of a clock apart: everyone's first clock is a full period
+--- plus a third of one for each player before them.
+function sim.clocks(period: number): {number}
+   local n = #board.PLAYERS
+   local clocks: {number} = {}
+   for p = 1, n do clocks[p] = period + period * (p - 1) / n end
+   return clocks
+end
+
+--- Run every live player's shot clock down by `dt` seconds and return the
+--- players whose clocks ran out, in the order they did. Each of those starts
+--- again from the moment it ran out, so the clocks keep their stagger.
+function sim.run_down(state: State, clocks: {number}, dt: number, period: number): {integer}
+   local due: {integer} = {}
    for p, pl in ipairs(state.players) do
       if pl.alive then
-         local shot = aim[p]
-         if shot and sim.can_head(p, shot.heading) and sim.legal(state, p, shot.cells) then
-            result.fired[#result.fired + 1] = shot
-         else
-            pl.alive, pl.out = false, "stuck"
-            result.out[#result.out + 1] = p
-         end
+         clocks[p] = clocks[p] - dt
+         if clocks[p] <= 0 then due[#due + 1] = p end
       end
    end
-   result.cleared = sim.fire(state, result.fired)
-   return result
+   table.sort(due, function(p: integer, q: integer): boolean
+      if clocks[p] ~= clocks[q] then return clocks[p] < clocks[q] end
+      return p < q
+   end)
+   for _, p in ipairs(due) do
+      repeat clocks[p] = clocks[p] + period until clocks[p] > 0
+   end
+   return due
 end
 
 --- How many players are still in.

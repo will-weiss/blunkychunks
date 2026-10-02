@@ -197,13 +197,32 @@ local function look_color(look: sim.Look): string
    return look == "clear" and INK or look == "home" and AMBER or DANGER
 end
 
---- A ghost: a wash and an outline in its look's colour.
-local function draw_ghost(c: Canvas, cells: {integer}, look: sim.Look)
-   local hex = look_color(look)
-   emit(c, ('  <g fill="%s" fill-opacity="0.18" stroke="none">'):format(hex))
-   for _, i in ipairs(cells) do poly(c, i, "") end
+--- Every triangle of a ghost, landed or hit.
+local function ghost_cells(g: sim.Ghost): {integer}
+   local out = indices(g.cells)
+   for _, t in ipairs(g.hits) do out[#out + 1] = t.i end
+   return out
+end
+
+--- A ghost: its triangles in faded colours and an outline in its look's
+--- colour, with its hits in full colour and crossed out.
+local function draw_ghost(c: Canvas, g: sim.Ghost)
+   local B = c.board
+   emit(c, '  <g fill-opacity="0.3" stroke="none">')
+   for _, t in ipairs(g.cells) do poly(c, t.i, ('fill="%s"'):format(bc.FILL[t.color])) end
    emit(c, "  </g>")
-   silhouette(c, cells, ('stroke="%s" stroke-width="2.6" stroke-dasharray="5 3"'):format(hex))
+   emit(c, ('  <g stroke="%s" stroke-width="0.9">'):format(PAPER))
+   for _, t in ipairs(g.hits) do poly(c, t.i, ('fill="%s"'):format(bc.FILL[t.color])) end
+   emit(c, "  </g>")
+   emit(c, ('  <g stroke="%s" stroke-width="2" stroke-linecap="round">'):format(PAPER))
+   local r = c.side * 0.16
+   for _, t in ipairs(g.hits) do
+      local p = board.centroid(B.a[t.i], B.b[t.i], c.side)
+      seg(c, { x1 = p.x - r, y1 = p.y - r, x2 = p.x + r, y2 = p.y + r })
+      seg(c, { x1 = p.x - r, y1 = p.y + r, x2 = p.x + r, y2 = p.y - r })
+   end
+   emit(c, "  </g>")
+   silhouette(c, ghost_cells(g), ('stroke="%s" stroke-width="2.6" stroke-dasharray="5 3"'):format(look_color(g.look)))
 end
 
 --- An arrow from just ahead of `cells` along `heading`.
@@ -264,7 +283,7 @@ end
 
 --- How many steps a ghost travels from its aim.
 local function travel(B: Board, shot: sim.Shot, g: sim.Ghost): integer
-   return (g.cells[1] - shot.cells[1].i) // B.step[shot.heading]
+   return (g.cells[1].i - shot.cells[1].i) // B.step[shot.heading]
 end
 
 --- A short note beside a ghost.
@@ -317,19 +336,19 @@ local function render_shots(B: Board, side: number, size: integer, seed: integer
    -- Player 3 straight across, landing clear against a dashed line rather
    -- than the pile.
    local clear = find_aim(state, 3, "clear", board.HEADINGS[3][2], function(shot: sim.Shot, g: sim.Ghost): boolean
-      for _, i in ipairs(g.cells) do
-         local j = i + B.step[shot.heading]
-         if in_pile[j] or in_pile[i + B.pass[shot.heading][board.facing(i)]] then return false end
+      for _, t in ipairs(g.cells) do
+         local j = t.i + B.step[shot.heading]
+         if in_pile[j] or in_pile[t.i + B.pass[shot.heading][board.facing(t.i)]] then return false end
       end
-      return travel(B, shot, g) > 0
+      return #g.hits == 0 and travel(B, shot, g) > 0
    end)
    -- Player 2 on a heading that runs along their own arm into their own back
    -- wall, far enough from it that the ghost stands apart from the aim.
    local friendly = find_aim(state, 2, "friendly", nil, function(shot: sim.Shot, g: sim.Ghost): boolean
-      for _, i in ipairs(g.cells) do
-         if B.kind[i] ~= 2 then return false end
+      for _, t in ipairs(g.cells) do
+         if B.kind[t.i] ~= 2 then return false end
       end
-      return travel(B, shot, g) >= 6
+      return #g.hits == 0 and travel(B, shot, g) >= 6
    end)
 
    local c = canvas(B, side)
@@ -338,15 +357,15 @@ local function render_shots(B: Board, side: number, size: integer, seed: integer
    for _, shot in ipairs({ clear, friendly, mine }) do
       local g = sim.ghost(state, shot.player, shot.cells, shot.heading)
       local owner = board.PLAYERS[shot.player].color
-      draw_ghost(c, g.cells, g.look)
+      draw_ghost(c, g)
       draw_chunk(c, shot.cells, owner, g.look == "friendly" and 0.35 or 1)
       draw_arrow(c, shot.cells, shot.heading, g.look == "clear" and owner or look_color(g.look))
       if g.look == "clear" then
-         note(c, g.cells, "lands clear", INK, 0, -2.2 * side)
+         note(c, ghost_cells(g), "lands clear", INK, 0, -2.2 * side)
       elseif g.look == "home" then
-         note(c, g.cells, "stopped in its own home", AMBER, -5.5 * side, 0.4 * side)
+         note(c, ghost_cells(g), "stopped in its own home", AMBER, -5.5 * side, 0.4 * side)
       else
-         note(c, g.cells, "friendly fire", DANGER, 0, 2.6 * side)
+         note(c, ghost_cells(g), "friendly fire", DANGER, 0, 2.6 * side)
       end
    end
    note(c, indices(pile), "a pile at rest", MUTED, 4.2 * side, 0.4 * side)
