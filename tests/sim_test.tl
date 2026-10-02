@@ -613,48 +613,64 @@ function T.last_one_standing_wins_and_all_out_at_once_is_a_draw()
    A.eq(sim.winner(s), nil, "a draw")
 end
 
-function T.shot_clocks_are_staggered_and_run_out_in_turn()
-   local s = fresh()
-   local c = sim.clocks(9)
-   A.eq(c[1], 9, "Player 1 gets a full clock")
-   A.eq(c[2], 12, "Player 2 a third of one more")
-   A.eq(c[3], 15, "Player 3 two thirds more")
-   for round = 1, 2 do
-      for p = 1, 3 do
-         local due = sim.run_down(s, c, round == 1 and p == 1 and 9 or 3, 9)
-         A.eq(#due, 1, "one clock at a time")
-         A.eq(due[1], p, "in turn")
-         A.eq(c[p], 9, "and it starts again")
-      end
-   end
-end
-
-function T.a_jump_runs_out_every_clock_it_passes_earliest_first()
-   local s = fresh()
-   local c = { 6.0, 9.0, 3.0 }
-   local due = sim.run_down(s, c, 7, 9)
-   A.eq(#due, 2, "two ran out")
-   A.eq(due[1], 3, "Player 3's first")
-   A.eq(due[2], 1, "then Player 1's")
-   A.eq(c[1], 8, "each starts again from when it ran out")
-   A.eq(c[2], 2, "the other just runs down")
-   A.eq(c[3], 5, "keeping the stagger")
-end
-
-function T.an_out_players_clock_stops()
-   local s = fresh()
-   s.players[1].alive = false
-   local c = sim.clocks(9)
-   A.eq(#sim.run_down(s, c, 10, 9), 0, "nobody else is due yet")
-   A.eq(c[1], 9, "Player 1's clock didn't run")
-   A.eq(c[2], 2, "Player 2's did")
-end
-
 function T.an_empty_board_tick_moves_nothing()
    local s = fresh()
    local r = sim.tick(s)
    A.eq(r.moved, 0, "nothing to move")
    A.eq(#r.cleared, 0, "nothing to clear")
+end
+
+function T.settle_aims_the_middle_spot_by_default_and_stays_near_where_it_wants()
+   local s = sim.new(board.new(6, 5), 6, bc.seeded_random(3))
+   for p = 1, 3 do
+      local first = sim.settle(s, p, { slot = 1, turn = 0, prefer = 2 })
+      A.truthy(first.shot, "a shot")
+      A.eq(first.pick, (#first.spots + 1) // 2, "the middle spot")
+      A.truthy(sim.legal(s, p, first.shot.cells), "legal")
+      A.eq(first.shot.heading, board.HEADINGS[p][2], "straight across")
+      -- Want the last spot, then block it: the nearest legal one is taken.
+      local last = first.spots[#first.spots]
+      local cells = board.place(s.board, first.shape, last.x, last.y)
+      local want = sim.centre(s.board, cells)
+      local again = sim.settle(s, p, { slot = 1, turn = 0, prefer = 2, want = want, count = #cells })
+      A.eq(again.pick, #again.spots, "the spot it wants")
+   end
+end
+
+function T.settle_never_fires_on_its_own_back_wall()
+   local s = sim.new(board.new(6, 5), 6, bc.seeded_random(3))
+   for p = 1, 3 do
+      for prefer = 1, 3 do
+         local first = sim.settle(s, p, { slot = 1, turn = 0, prefer = prefer })
+         for _, spot in ipairs(first.spots) do
+            local cells = board.place(s.board, first.shape, spot.x, spot.y)
+            local it = sim.settle(s, p, { slot = 1, turn = 0, prefer = prefer, want = sim.centre(s.board, cells), count = #cells })
+            A.truthy(not sim.friendly(s, p, it.shot.cells, it.shot.heading), "not friendly fire")
+         end
+      end
+   end
+end
+
+function T.settle_has_no_shot_when_nothing_fits()
+   local s = sim.new(board.new(6, 5), 6, bc.seeded_random(3))
+   local all: {Tri} = {}
+   for _, i in ipairs(s.board.homes[1]) do all[#all + 1] = tri(i, "red") end
+   sim.add_chunk(s, 1, board.HEADINGS[1][2], all)
+   A.eq(sim.settle(s, 1, { slot = 1, turn = 0, prefer = 2 }).shot, nil, "no shot")
+   A.eq(sim.settle(s, 2, { slot = 9, turn = 0, prefer = 2 }).shot, nil, "nor from a slot that isn't there")
+end
+
+function T.the_hash_follows_the_match()
+   local x = sim.new(board.new(6, 5), 6, bc.seeded_random(3))
+   local y = sim.new(board.new(6, 5), 6, bc.seeded_random(3), bc.seeded_random(99))
+   A.eq(sim.hash(x), sim.hash(y), "the same match hashes the same, however its bots think")
+   local shot = sim.settle(x, 1, { slot = 1, turn = 0, prefer = 2 }).shot
+   sim.lock_in(x, 1, shot)
+   A.truthy(sim.hash(x) ~= sim.hash(y), "a shot changes it")
+   sim.lock_in(y, 1, sim.settle(y, 1, { slot = 1, turn = 0, prefer = 2 }).shot)
+   A.eq(sim.hash(x), sim.hash(y), "the same shot agrees again")
+   sim.tick(x)
+   A.truthy(sim.hash(x) ~= sim.hash(y), "a tick changes it")
 end
 
 return T

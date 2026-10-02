@@ -6,11 +6,14 @@
 ---   tl run tests/soak.tl -- --greedy 1
 ---
 --- As in the game, ticks are 0.28 s apart and each player's 8 s shot clock
---- is staggered a third of a clock behind the one before.
+--- is staggered a third of a clock behind the one before (match.tl). Every
+--- match is then replayed from its shots alone, as a networked player would
+--- see it, and must end the same.
 
 local bc = require("blunkychunks")
 local board = require("board")
 local sim = require("sim")
+local match = require("match")
 local bots = require("bots")
 
 local argv = _G.arg as {string} or {}
@@ -26,8 +29,8 @@ local n, r = board.options(argv)
 local SEEDS = num("seeds", 5)
 local SIZE = num("size", 14)
 local brains: {integer: bots.Brain} = { [num("greedy", 0)] = "greedyclear" }
-local STEP <const> = 0.28
-local PERIOD <const> = 8.0
+local STEP <const> = 280
+local PERIOD <const> = 8000
 local MAX_TICKS <const> = 12000
 
 local function check(state: sim.State, where: string)
@@ -63,25 +66,40 @@ end
 local outs: {string: integer} = {}
 local wins: {integer: integer} = {}
 for seed = 1, SEEDS do
-   local state = sim.new(board.new(n, r), SIZE, bc.seeded_random(seed))
-   local fired, ticks, clears, hits = 0, 0, 0, 0
-   local clocks = sim.clocks(PERIOD)
+   local state = sim.new(board.new(n, r), SIZE, bc.seeded_random(seed), bc.seeded_random(seed + 7919))
+   local m = match.new(state, PERIOD, STEP)
+   local fired, clears, hits = 0, 0, 0
    local shots = bots.plan(state, nil, brains)
-   while not sim.over(state) and ticks < MAX_TICKS do
-      local res = sim.tick(state)
-      ticks = ticks + 1
-      clears = clears + #res.cleared
-      hits = hits + #res.hits
-      check(state, ("seed %d tick %d"):format(seed, ticks))
-      for _, p in ipairs(sim.run_down(state, clocks, STEP, PERIOD)) do
-         if sim.over(state) then break end
-         local lock = sim.lock_in(state, p, bots.refresh(state, p, shots[p], brains[p]))
+   local log: {integer: {sim.Shot}} = { {}, {}, {} }
+   local hooks: match.Hooks = {
+      decide = function(p: integer, k: integer): boolean, sim.Shot
+         local shot = bots.refresh(state, p, shots[p], brains[p])
+         log[p][k] = shot or false as sim.Shot
+         return true, shot
+      end,
+      locked = function(p: integer, lock: sim.LockResult)
          if lock.fired then fired = fired + 1 end
          clears = clears + #lock.cleared
-         check(state, ("seed %d tick %d Player %d's lock-in"):format(seed, ticks, p))
+         check(state, ("seed %d tick %d Player %d's lock-in"):format(seed, m.ticks, p))
          shots[p] = state.players[p].alive and bots.choose(state, p, brains[p]) or nil
-      end
+      end,
+      ticked = function(res: sim.TickResult)
+         clears = clears + #res.cleared
+         hits = hits + #res.hits
+         check(state, ("seed %d tick %d"):format(seed, m.ticks))
+      end,
+   }
+   while not sim.over(state) and m.ticks < MAX_TICKS do
+      match.advance(m, m.now + STEP, hooks)
    end
+   local ticks = m.ticks
+
+   local again = sim.new(board.new(n, r), SIZE, bc.seeded_random(seed))
+   local replay = match.new(again, PERIOD, STEP)
+   match.advance(replay, m.now, {
+      decide = function(p: integer, k: integer): boolean, sim.Shot return true, log[p][k] or nil end,
+   })
+   assert(sim.hash(again) == sim.hash(state), ("seed %d: the replay ended differently"):format(seed))
    local how: {string} = {}
    for p, pl in ipairs(state.players) do
       how[p] = pl.alive and "in" or tostring(pl.out)

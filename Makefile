@@ -3,6 +3,9 @@
 #   make          compile every .tl into build/ as Lua 5.1
 #   make run      compile, then launch the game in LOVE (you are Player 1)
 #   make bots     compile, then launch an all-bot match
+#   make host     compile, then host a networked match (others join it)
+#   make join     compile, then join one: make join HOST=10.0.0.2
+#   make server   compile, then run a headless server for networked matches
 #   make check    type-check all Teal sources (game, tests and scripts)
 #   make test     run the rules-engine tests under the system Lua
 #   make soak     play whole bot matches headless, checking invariants
@@ -41,7 +44,7 @@ TESTS  := $(wildcard tests/*.tl)
 LUA := $(patsubst %.tl,$(OUT)/%.lua,$(SHARED)) \
        $(patsubst src/%.tl,$(OUT)/%.lua,$(GAME))
 
-.PHONY: all game run bots check test soak images clean distclean \
+.PHONY: all game run bots host join server check test soak images clean distclean \
         dist love mac windows linux
 
 all: game
@@ -62,6 +65,17 @@ run: game
 
 bots: game
 	$(LOVE) $(OUT) --bots $(BOARD) $(ARGS)
+
+HOST ?= 127.0.0.1
+
+host: game
+	$(LOVE) $(OUT) --host $(BOARD) $(ARGS)
+
+join: game
+	$(LOVE) $(OUT) --join $(HOST) $(ARGS)
+
+server: game
+	$(LOVE) $(OUT) --server $(BOARD) $(ARGS)
 
 check:
 	$(TL) check $(SHARED) $(GAME) $(TESTS) render.tl layouts.tl
