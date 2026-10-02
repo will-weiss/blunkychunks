@@ -78,6 +78,14 @@ function T.a_bot_seat_plans_and_replans_after_firing()
    A.eq(seat.aim, nil, "no aim of its own")
 end
 
+function T.a_greedyclear_bot_seat_keeps_its_brain()
+   local s = fresh()
+   local seat = controls.bot(s, 2, "greedyclear")
+   A.eq(seat.brain, "greedyclear", "greedyclear")
+   A.truthy(sim.legal(s, 2, controls.shot(s, seat).cells), "fires a legal shot")
+   A.eq(controls.bot(s, 1).brain, "random", "random by default")
+end
+
 function T.a_human_aims_the_next_chunk_from_where_the_last_fired()
    local s = fresh()
    local seat = controls.human(s, 1, "keys")

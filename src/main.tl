@@ -141,7 +141,7 @@ local function seat_all(state: sim.State, picks?: {setup.Pick}): {controls.Seat}
       elseif not picks and keyboard and p == 1 then
          out[p] = controls.human(state, p, "keys")
       else
-         out[p] = controls.bot(state, p)
+         out[p] = controls.bot(state, p, was and was.brain)
       end
    end
    return out
@@ -150,7 +150,7 @@ end
 --- Who plays each of `seats`, to seat a new match or the setup screen.
 local function picks_of(seats: {controls.Seat}): {setup.Pick}
    local out: {setup.Pick} = {}
-   for p, seat in ipairs(seats) do out[p] = { kind = seat.kind, pad = seat.pad } end
+   for p, seat in ipairs(seats) do out[p] = { kind = seat.kind, pad = seat.pad, brain = seat.brain } end
    return out
 end
 

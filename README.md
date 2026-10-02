@@ -165,7 +165,7 @@ The game is written in Teal and runs in LÖVE 11.4.
 | `make run DIAMETER=12 NOTCH=5` | play on another size of board (also for `bots`, `soak`, `images`) |
 | `make run ARGS="--seed 42"`   | a reproducible match; `--fast` for a 2 second clock, `--size 8` for smaller chunks |
 | `make test`                   | the rules engine's tests                               |
-| `make soak`                   | whole bot matches played headless, checking the engine |
+| `make soak`                   | whole bot matches played headless, checking the engine (`ARGS="--greedy 1"` makes Player 1 a greedyclear bot) |
 | `make images`                 | redraw the figures in this README                      |
 | `make dist`                   | package standalone builds for macOS, Windows and Linux into `dist/` (`make mac`, `windows`, `linux` or `love` for one) |
 
@@ -182,13 +182,20 @@ The game is written in Teal and runs in LÖVE 11.4.
 
 A match starts from the setup screen: pick the board, chunk size and shot
 clock, and who plays each home. Every controller shares one cursor: `↑` `↓`
-choose a row, `←` `→` change it (on a player's row, cycling between a bot, the
-keyboard and each plugged-in gamepad), and `Enter` starts the match (`Esc`
+choose a row, `←` `→` change it (on a player's row, cycling between the two
+kinds of bot, the keyboard and each plugged-in gamepad), and `Enter` starts the match (`Esc`
 quits). Any gamepad drives the same cursor with its D-pad or stick, seated or
 not, and `A` selects the row: it steps an option on, sits that gamepad at a
 player's row, or starts the match from Start. A gamepad can also press `Start`
 to take the first home a bot has, `Start` again to begin, and `B` or `Back` to
 give the home back.
+
+There are two kinds of bot. A plain **Bot** tries a few random shots and
+takes the first that lands clear of its home. A **Greedyclear bot** tries
+every chunk, rotation, spot and heading it has, and takes the shot that
+clears the most triangles from its own home; between equals, the one that
+clears the most triangles in all. Neither fires a shot that would hit its own
+back wall unless nothing else fits.
 
 Gamepads can play during a match too, as many as there are bots to take over: press `Start`
 on one to take the first bot's home, and `Back` (or unplugging it) hands that

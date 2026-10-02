@@ -59,6 +59,7 @@ local record controls
       held: {Action: number} -- repeating actions held down: seconds to their next repeat
       aim: Aim -- humans
       plan: sim.Shot -- bots: what they will fire
+      brain: bots.Brain -- bots: how they choose it
    end
 end
 
@@ -139,10 +140,11 @@ local function choose_spot(state: sim.State, seat: Seat, i: integer)
    refresh_aim(state, seat)
 end
 
---- A bot seat for player `p`, with its first shot planned.
-function controls.bot(state: sim.State, p: integer): Seat
-   local seat: Seat = { player = p, kind = "bot" }
-   if state.players[p].alive then seat.plan = bots.choose(state, p) end
+--- A bot seat for player `p` with `brain` (random if left out), with its
+--- first shot planned.
+function controls.bot(state: sim.State, p: integer, brain?: bots.Brain): Seat
+   local seat: Seat = { player = p, kind = "bot", brain = brain or "random" }
+   if state.players[p].alive then seat.plan = bots.choose(state, p, seat.brain) end
    return seat
 end
 
@@ -170,7 +172,7 @@ end
 
 --- The seat's shot as its clock runs out, or nil when nothing it has fits.
 function controls.shot(state: sim.State, seat: Seat): sim.Shot
-   if seat.kind == "bot" then return bots.refresh(state, seat.player, seat.plan) end
+   if seat.kind == "bot" then return bots.refresh(state, seat.player, seat.plan, seat.brain) end
    local aim = seat.aim
    if not aim or not aim.pick then return nil end
    return { player = seat.player, slot = aim.slot, heading = heading(seat), cells = aim.cells }
@@ -180,7 +182,7 @@ end
 --- humans aim the next chunk from where the last one went.
 function controls.fired(state: sim.State, seat: Seat, r: sim.LockResult)
    if seat.kind == "bot" then
-      seat.plan = state.players[seat.player].alive and bots.choose(state, seat.player) or nil
+      seat.plan = state.players[seat.player].alive and bots.choose(state, seat.player, seat.brain) or nil
    elseif r.fired and seat.aim.want then
       seat.aim.want, seat.aim.count = centre(state.board, r.fired.cells), #r.fired.cells
    end
