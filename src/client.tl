@@ -77,11 +77,17 @@ local record client
       next_ping: number
       sent_aims: {integer: string}
       said_hash: integer
+      began: number -- local ms it started connecting
    end
+
+   CONNECT_TIMEOUT: number
 end
 
 local type Client = client.Client
 local type Game = client.Game
+
+--- How long to wait for the host to answer before giving up, in ms.
+client.CONNECT_TIMEOUT = 10000
 
 local MARGIN <const> = 60 -- ms the copy runs behind, beyond half a round trip
 local HASH_EVERY <const> = 16 -- ticks
@@ -103,6 +109,7 @@ function client.new(l: link.Link, now: (function(): number), name: string, hooks
       next_ping = 0,
       sent_aims = {},
       said_hash = 0,
+      began = now(),
    }
    return c
 end
@@ -306,6 +313,10 @@ function client.update(c: Client)
          local msg = wire.decode(e.data)
          if msg then receive(c, msg) end
       end
+   end
+   if c.status == "connecting" and c.now() - c.began > client.CONNECT_TIMEOUT then
+      c.link.close()
+      c.status, c.why = "gone", "no answer from the host. Check they're hosting, and that this machine can reach that address"
    end
    if c.status == "gone" or c.status == "connecting" then return end
    local now = c.now()

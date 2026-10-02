@@ -256,4 +256,15 @@ function T.a_client_with_another_version_is_turned_away()
    A.eq(c.status, "gone", "refused")
 end
 
+function T.joining_nobody_gives_up_after_a_while()
+   local w = world(21, 0)
+   w.hub.queues[0] = nil -- no server: nothing ever answers
+   local c = join(w, "Lonely")
+   run(w, client.CONNECT_TIMEOUT - 100)
+   A.eq(c.status, "connecting", "still trying")
+   run(w, 200)
+   A.eq(c.status, "gone", "then gives up")
+   A.truthy(c.why:find("no answer"), "saying why")
+end
+
 return T
