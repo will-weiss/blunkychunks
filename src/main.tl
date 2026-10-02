@@ -1,6 +1,7 @@
 --- Blunkychunks in LOVE. A match starts from the setup screen (setup.tl),
---- where the board, chunk size and shot clock are picked and each home is
---- given to a bot, the keyboard or a gamepad. With --play the match starts
+--- where the board's diameter and personal area, the chunk size and the shot
+--- clock are picked and each home is given to a bot, the keyboard or a
+--- gamepad. With --play the match starts
 --- straight away, you on the keyboard as Player 1 against two bots; with
 --- --bots three bots play each other. During a match a gamepad can still join
 --- by pressing Start, taking over the first bot's home, and Back hands it
@@ -64,10 +65,10 @@ local chunk_size = 14
 
 local function effect(g: Game, i: integer, text: string, hex: string, life: number)
    local B = g.state.board
-   local p = board.centroid(B.a[i], B.b[i], view.side)
+   local x, y = draw.screen(view, board.centroid(B.a[i], B.b[i], view.side))
    local r, gg, b = draw.rgb(hex)
    g.effects[#g.effects + 1] = {
-      x = view.cx + p.x - 6, y = view.cy + p.y - 9, text = text,
+      x = x - 6, y = y - 9, text = text,
       r = r, g = gg, b = b, ttl = life, life = life,
    }
 end
@@ -572,6 +573,7 @@ function love.gamepadaxis(pad: love.Joystick, axis: string, value: number)
    if menu then return menu_axis(pad, axis, value) end
    local seat = seat_of(game, "pad", pad)
    if not seat then return end
+   for _, turn in ipairs(controls.dial_actions(seat, axis, value)) do seat_action(game, seat, turn) end
    local action = controls.axis_action(seat, axis, value)
    if action then seat_action(game, seat, action) end
 end

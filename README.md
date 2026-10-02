@@ -180,8 +180,9 @@ The game is written in Teal and runs in LÖVE 11.4.
 | `R`                | new match                           |
 | `Esc`              | back to the setup screen            |
 
-A match starts from the setup screen: pick the board, chunk size and shot
-clock, and who plays each home. Every controller shares one cursor: `↑` `↓`
+A match starts from the setup screen: pick the board's diameter and personal
+area (the notch), the chunk size and shot clock, each a step of one (the
+diameter, always even, steps by two), and who plays each home. Every controller shares one cursor: `↑` `↓`
 choose a row, `←` `→` change it (on a player's row, cycling between the two
 kinds of bot, the keyboard and each plugged-in gamepad), and `Enter` starts the match (`Esc`
 quits). Any gamepad drives the same cursor with its D-pad or stick, seated or
@@ -206,12 +207,20 @@ buttons for every controller in play.
 | -------------------- | ------------------------------------ |
 | `X` `Y` `B`          | pick a chunk from your bank          |
 | `LB` / `RB`          | rotate counterclockwise / clockwise  |
+| right stick, round   | rotate the way you turn it           |
 | D-pad or stick ← →   | slide the chunk along your back wall |
 | D-pad or stick ↑ ↓   | change heading                       |
 | `A`                  | fire now                             |
 | `Start` / `Back`     | join / leave                         |
 
 Holding a slide or a rotate, on the keyboard or a gamepad, keeps it going.
+
+The right stick is a dial. Push it out anywhere and that's the anchor; turn it
+round from there and the chunk rotates the same way. The first 10° gives one
+rotation, and after that it snaps to the nearest 60° (89° is one rotation,
+91° is two). Turning back undoes them, though only 3° past each mark, so a
+stick resting on one doesn't flicker. Letting the stick go drops the
+anchor.
 
 ## Ideas
 

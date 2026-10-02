@@ -1,4 +1,4 @@
---- Rendering for the LOVE build: the board in its walls, chunks (live and
+--- Rendering for the LOVE build: the board, chunks (live and
 --- aimed), ghosts, headings and the players' panels. Pure output -- nothing
 --- here changes the simulation. All the sqrt(3) lives in board.tl's drawing
 --- helpers.
@@ -67,7 +67,6 @@ local MUTED <const> = "#7b8794"
 local DASH <const> = "#52606d"
 local AMBER <const> = "#d99a00"
 local DANGER <const> = "#c0392b"
-local STONE <const> = { "#b9ad9b", "#a99d8b", "#c4b9a8", "#9f9381", "#b2a593" }
 
 --- "#rrggbb" -> r, g, b in 0..1.
 function draw.rgb(hex: string): number, number, number
@@ -113,32 +112,57 @@ local function cache(v: View): Cache
    return c
 end
 
+--- The board is drawn turned a twelfth of a turn anticlockwise from board
+--- space, so Player 1's corner points straight down and the board's sides
+--- stand upright, like a Tetris well with Player 1 at the bottom.
+local TURN <const> = -math.pi / 6
+local COS <const> = math.cos(TURN)
+local SIN <const> = math.sin(TURN)
+
+--- A board-space vector turned as the board is drawn.
+local function turn(x: number, y: number): number, number
+   return x * COS - y * SIN, x * SIN + y * COS
+end
+
+--- Headings 1..6 as they point on screen, the board turned (cf.
+--- board.HEADING_NAMES, which name them in board space).
+local HEADING_NAMES <const> = { "NE", "SE", "S", "SW", "NW", "N" }
+
 --- Board space -> screen.
-local function at(v: View, p: XY): number, number
-   return v.cx + p.x, v.cy + p.y
+function draw.screen(v: View, p: XY): number, number
+   local x, y = turn(p.x, p.y)
+   return v.cx + x, v.cy + y
+end
+
+--- Draw in board space until `leave`: the origin at the board's centre,
+--- turned as the board is drawn.
+local function enter(v: View)
+   love.graphics.push()
+   love.graphics.translate(v.cx, v.cy)
+   love.graphics.rotate(TURN)
+end
+
+local function leave()
+   love.graphics.pop()
 end
 
 local function tri_fill(v: View, i: integer, ox: number, oy: number)
    local p = cache(v).corners[i]
-   local x, y = v.cx + ox, v.cy + oy
-   love.graphics.polygon("fill", p[1] + x, p[2] + y, p[3] + x, p[4] + y, p[5] + x, p[6] + y)
+   love.graphics.polygon("fill", p[1] + ox, p[2] + oy, p[3] + ox, p[4] + oy, p[5] + ox, p[6] + oy)
 end
 
-local function segment(v: View, s: board.Seg, ox: number, oy: number)
-   love.graphics.line(v.cx + s.x1 + ox, v.cy + s.y1 + oy, v.cx + s.x2 + ox, v.cy + s.y2 + oy)
+local function segment(s: board.Seg, ox: number, oy: number)
+   love.graphics.line(s.x1 + ox, s.y1 + oy, s.x2 + ox, s.y2 + oy)
 end
 
 --- The biggest view of board `B` that fits the rectangle, centred in it.
 function draw.layout(B: board.Board, x: number, y: number, w: number, h: number): View
    local xmin, xmax, ymin, ymax = math.huge, -math.huge, math.huge, -math.huge
-   local g = board.geometry(B, 1)
-   local cells: {integer} = {}
-   for _, i in ipairs(B.cells) do cells[#cells + 1] = i end
-   for _, i in ipairs(g.walls) do cells[#cells + 1] = i end
-   for _, i in ipairs(cells) do
+   for _, i in ipairs(B.cells) do
       for _, p in ipairs(board.corners(B.a[i], B.b[i], 1)) do
-         xmin, xmax = math.min(xmin, p.x), math.max(xmax, p.x)
-         ymin, ymax = math.min(ymin, p.y), math.max(ymax, p.y)
+         local px, py = turn(p.x, p.y)
+         xmin, xmax = math.min(xmin, px), math.max(xmax, px)
+         ymin, ymax = math.min(ymin, py), math.max(ymax, py)
       end
    end
    local side = math.floor(math.min(w / (xmax - xmin), h / (ymax - ymin)) * 4) / 4
@@ -162,16 +186,13 @@ local function dashed(x1: number, y1: number, x2: number, y2: number, dash: numb
    end
 end
 
---- The board: stone walls, each home tinted in its player's colour, the grid,
---- the dashed lines round the middle and the back walls in ink.
+--- The board: each home tinted in its player's colour, the grid, the dashed
+--- lines round the middle and the back walls in ink. The walls themselves
+--- aren't drawn; the board sits on bare paper.
 function draw.board(v: View)
    local B = v.board
    local c = cache(v)
-   for _, i in ipairs(c.geometry.walls) do
-      local h = (B.a[i] * B.a[i] * 7 + B.b[i] * B.b[i] * 13 + B.a[i] * B.b[i] * 5 + B.a[i] * 3 + B.b[i]) % #STONE
-      color(STONE[h + 1])
-      tri_fill(v, i, 0, 0)
-   end
+   enter(v)
    for _, i in ipairs(B.cells) do
       local k = B.kind[i]
       if k > 0 then
@@ -185,18 +206,17 @@ function draw.board(v: View)
    end
    color(GRID)
    love.graphics.setLineWidth(1)
-   for _, s in ipairs(c.geometry.grid) do segment(v, s, 0, 0) end
+   for _, s in ipairs(c.geometry.grid) do segment(s, 0, 0) end
    color(DASH)
    love.graphics.setLineWidth(2)
    for j = 0, 5 do
       local s = board.wall(B.n, v.side, j)
-      local x1, y1 = at(v, { x = s.x1, y = s.y1 })
-      local x2, y2 = at(v, { x = s.x2, y = s.y2 })
-      dashed(x1, y1, x2, y2, v.side * 0.45, v.side * 0.35)
+      dashed(s.x1, s.y1, s.x2, s.y2, v.side * 0.45, v.side * 0.35)
    end
    color(INK)
    love.graphics.setLineWidth(3.5)
-   for _, s in ipairs(c.geometry.outline) do segment(v, s, 0, 0) end
+   for _, s in ipairs(c.geometry.outline) do segment(s, 0, 0) end
+   leave()
 end
 
 --- The silhouette of `cells`: every edge they don't share with each other.
@@ -214,7 +234,7 @@ local function silhouette(v: View, cells: {Tri}, ox: number, oy: number)
                   if p.a == q.a and p.b == q.b then pts[#pts + 1] = board.point(p.a, p.b, v.side) end
                end
             end
-            love.graphics.line(v.cx + pts[1].x + ox, v.cy + pts[1].y + oy, v.cx + pts[2].x + ox, v.cy + pts[2].y + oy)
+            love.graphics.line(pts[1].x + ox, pts[1].y + oy, pts[2].x + ox, pts[2].y + oy)
          end
       end
    end
@@ -223,6 +243,7 @@ end
 --- A chunk's triangles, shifted by (ox, oy) pixels for animation, at `alpha`,
 --- outlined in its owner's colour.
 function draw.chunk(v: View, cells: {Tri}, ox: number, oy: number, alpha: number, owner: string)
+   enter(v)
    for _, t in ipairs(cells) do
       color(bc.FILL[t.color], alpha)
       tri_fill(v, t.i, ox, oy)
@@ -232,12 +253,12 @@ function draw.chunk(v: View, cells: {Tri}, ox: number, oy: number, alpha: number
    local corners = cache(v).corners
    for _, t in ipairs(cells) do
       local p = corners[t.i]
-      local x, y = v.cx + ox, v.cy + oy
-      love.graphics.polygon("line", p[1] + x, p[2] + y, p[3] + x, p[4] + y, p[5] + x, p[6] + y)
+      love.graphics.polygon("line", p[1] + ox, p[2] + oy, p[3] + ox, p[4] + oy, p[5] + ox, p[6] + oy)
    end
    color(owner, alpha)
    love.graphics.setLineWidth(2.5)
    silhouette(v, cells, ox, oy)
+   leave()
 end
 
 --- The colour that goes with a ghost's look: ink when it lands clear, amber
@@ -252,6 +273,7 @@ end
 function draw.ghost(v: View, ghost: sim.Ghost)
    local B = v.board
    local all: {Tri} = {}
+   enter(v)
    for _, t in ipairs(ghost.cells) do
       color(bc.FILL[t.color], 0.3)
       tri_fill(v, t.i, 0, 0)
@@ -267,26 +289,35 @@ function draw.ghost(v: View, ghost: sim.Ghost)
    local r = v.side * 0.16
    for _, t in ipairs(ghost.hits) do
       local p = board.centroid(B.a[t.i], B.b[t.i], v.side)
-      local x, y = v.cx + p.x, v.cy + p.y
-      love.graphics.line(x - r, y - r, x + r, y + r)
-      love.graphics.line(x - r, y + r, x + r, y - r)
+      -- Turned back, so the crosses stay upright on screen.
+      love.graphics.push()
+      love.graphics.translate(p.x, p.y)
+      love.graphics.rotate(-TURN)
+      love.graphics.line(-r, -r, r, r)
+      love.graphics.line(-r, r, r, -r)
+      love.graphics.pop()
    end
    color(draw.look_color(ghost.look), 0.95)
    love.graphics.setLineWidth(2.5)
    silhouette(v, all, 0, 0)
+   leave()
 end
 
 --- Grey `cells` out, for an aim that would be friendly fire.
 function draw.grey(v: View, cells: {Tri})
    love.graphics.setColor(PAPER[1], PAPER[2], PAPER[3], 0.7)
+   enter(v)
    for _, t in ipairs(cells) do tri_fill(v, t.i, 0, 0) end
+   leave()
 end
 
 --- A red outline round an aim that fits nowhere.
 function draw.misfit(v: View, cells: {Tri})
    color(DANGER, 0.9)
    love.graphics.setLineWidth(3)
+   enter(v)
    silhouette(v, cells, 0, 0)
+   leave()
 end
 
 --- The pixel offset of one step on `heading`.
@@ -321,10 +352,12 @@ function draw.arrow(v: View, cells: {Tri}, heading: integer, owner: string, alph
    local bx, by = hx - dx * v.side * 0.7, hy - dy * v.side * 0.7
    color(owner, alpha)
    love.graphics.setLineWidth(3)
-   love.graphics.line(v.cx + tx, v.cy + ty, v.cx + hx, v.cy + hy)
-   love.graphics.polygon("fill", v.cx + hx, v.cy + hy,
-      v.cx + bx + px * v.side * 0.35, v.cy + by + py * v.side * 0.35,
-      v.cx + bx - px * v.side * 0.35, v.cy + by - py * v.side * 0.35)
+   enter(v)
+   love.graphics.line(tx, ty, hx, hy)
+   love.graphics.polygon("fill", hx, hy,
+      bx + px * v.side * 0.35, by + py * v.side * 0.35,
+      bx - px * v.side * 0.35, by - py * v.side * 0.35)
+   leave()
 end
 
 --- A bank chunk (Eisenstein cells) drawn small, centred at (x, y).
@@ -378,7 +411,7 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {numbe
 
       love.graphics.setFont(big)
       color(pl.color)
-      local home = ({ "southwest", "northwest", "east" })[p]
+      local home = ({ "south", "northwest", "northeast" })[p]
       love.graphics.print(pl.name, x + 14, top + 10)
       love.graphics.setFont(small)
       color(MUTED)
@@ -424,7 +457,7 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {numbe
             note = human and "this chunk doesn't fit like this: rotate or pick another" or "re-aiming"
             hue = human and DANGER or MUTED
          else
-            note = ("aiming %s, %s"):format(board.HEADING_NAMES[aim.heading], LOOK_NOTE[aim.look])
+            note = ("aiming %s, %s"):format(HEADING_NAMES[aim.heading], LOOK_NOTE[aim.look])
             hue = aim.look == "clear" and INK or aim.look == "home" and AMBER or DANGER
          end
          color(hue)

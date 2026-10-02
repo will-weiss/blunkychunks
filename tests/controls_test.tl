@@ -136,6 +136,52 @@ function T.the_stick_acts_once_per_push_then_repeats_while_held()
    A.eq(controls.axis_action(seat, "triggerleft", 1.0), nil, "triggers do nothing")
 end
 
+--- Feed the right stick round to `deg` degrees (clockwise as seen) from
+--- straight up, in small steps from `from`, and collect what it asked for.
+local function dial_to(seat: controls.Seat, from: number, deg: number): {controls.Action}
+   local out: {controls.Action} = {}
+   local step = deg > from and 1 or -1
+   for a = from + step, deg, step do
+      local t = math.rad(a - 90)
+      for _, axis in ipairs({ "rightx", "righty" }) do
+         local v = axis == "rightx" and math.cos(t) or math.sin(t)
+         for _, act in ipairs(controls.dial_actions(seat, axis, v)) do out[#out + 1] = act end
+      end
+   end
+   return out
+end
+
+function T.the_right_stick_dials_rotations_from_where_it_is_pushed()
+   local s = fresh()
+   local seat = controls.human(s, 2, "pad")
+   A.eq(#controls.dial_actions(seat, "righty", -1.0), 0, "pushed up: the anchor")
+   A.eq(#dial_to(seat, 0, 9), 0, "9 degrees is nothing")
+   local r = dial_to(seat, 9, 11)
+   A.eq(#r, 1, "past 10 degrees, one rotation")
+   A.eq(r[1], "turn_cw", "clockwise")
+   A.eq(#dial_to(seat, 11, 89), 0, "still one at 89")
+   A.eq(#dial_to(seat, 89, 91), 1, "two past 90")
+   A.eq(#dial_to(seat, 91, 88), 0, "a wobble back under 90 keeps two")
+   A.eq(#dial_to(seat, 88, 91), 0, "and nothing doubles going over again")
+   A.eq(#dial_to(seat, 91, 86), 1, "back a few degrees past 90 is one")
+   A.eq(#dial_to(seat, 86, 91), 1, "and over 90 again is two")
+   A.eq(#dial_to(seat, 91, 400), 5, "seven round past a full turn")
+   r = dial_to(seat, 400, 5)
+   A.eq(#r, 7, "turning back undoes them all")
+   A.eq(r[1], "turn_ccw", "counterclockwise")
+   A.eq(#dial_to(seat, 5, 11), 1, "one again past 10")
+   A.eq(#dial_to(seat, 11, 8), 0, "still one a little under 10")
+   A.eq(#dial_to(seat, 8, 11), 0, "nothing more back over it")
+   r = dial_to(seat, 11, -20)
+   A.eq(#r, 2, "back through the anchor and one the other way")
+   A.eq(r[1], "turn_ccw", "counterclockwise")
+   controls.dial_actions(seat, "rightx", 0)
+   controls.dial_actions(seat, "righty", 0)
+   A.eq(#controls.dial_actions(seat, "rightx", 1.0), 0, "let go, then pushed right: a new anchor")
+   A.eq(#dial_to(seat, 90, 70), 1, "so turning from there counts from there")
+   A.eq(#controls.dial_actions(seat, "leftx", 1.0), 0, "the left stick doesn't dial")
+end
+
 function T.every_controller_has_a_legend()
    for _, kind in ipairs({ "keys", "pad" } as {controls.Kind}) do
       A.truthy(#controls.legend(kind) > 0, kind .. " legend")

@@ -51,11 +51,23 @@ local record controls
       ghost: sim.Ghost
    end
 
+   --- The right stick as a dial. Where it is first pushed is the anchor;
+   --- `swept` is how far it has turned since, in degrees, clockwise as seen.
+   record Dial
+      x: number
+      y: number
+      on: boolean -- pushed out, with an anchor
+      last: number -- its angle when last seen, in degrees
+      swept: number
+      turns: integer -- rotations applied since the anchor, clockwise positive
+   end
+
    record Seat
       player: integer
       kind: Kind
       pad: love.Joystick -- the gamepad, for kind "pad"
       stick: {string: integer} -- per stick axis: -1, 0 or 1, the way it was last pushed
+      dial: Dial -- the right stick, turned round to rotate
       held: {Action: number} -- repeating actions held down: seconds to their next repeat
       aim: Aim -- humans
       plan: sim.Shot -- bots: what they will fire
@@ -150,7 +162,7 @@ end
 
 --- A human seat for player `p`, on the keyboard or on gamepad `pad`.
 function controls.human(state: sim.State, p: integer, kind: controls.Kind, pad?: love.Joystick): Seat
-   local seat: Seat = { player = p, kind = kind, pad = pad, stick = {}, held = {}, aim = { slot = 1, turn = 0, heading = 2 } }
+   local seat: Seat = { player = p, kind = kind, pad = pad, stick = {}, dial = { x = 0, y = 0, swept = 0, turns = 0 }, held = {}, aim = { slot = 1, turn = 0, heading = 2 } }
    refresh_aim(state, seat)
    return seat
 end
@@ -302,6 +314,73 @@ function controls.axis_action(seat: Seat, axis: string, value: number): Action
    return action
 end
 
+--- How far the dial must turn from its anchor to rotate once, and then how
+--- much more each further rotation takes: it snaps to the nearest sixth.
+local NUDGE <const> = 10
+local SIXTH <const> = 60
+--- How far back past a threshold the dial must go to undo a rotation, so a
+--- stick held on one doesn't flicker.
+local SLACK <const> = 3
+
+--- The angle of (x, y) in degrees, -180..180. Lua 5.1's math.atan2 is gone
+--- from later Luas, and one-argument atan is in both.
+local function angle(x: number, y: number): number
+   if x == 0 then return y > 0 and 90 or y < 0 and -90 or 0 end
+   local t = math.deg(math.atan(y / x))
+   if x > 0 then return t end
+   return y >= 0 and t + 180 or t - 180
+end
+
+--- Rotations, clockwise positive, for a dial swept `swept` degrees from its anchor.
+local function dial_turns(swept: number): integer
+   local size = math.abs(swept)
+   if size < NUDGE then return 0 end
+   local n = math.max(1, math.floor(size / SIXTH + 0.5))
+   return swept < 0 and -n or n
+end
+
+--- Rotations for a dial at `swept` that was at `turns`. Rotations are added
+--- right at their thresholds but only undone `SLACK` degrees back past them.
+local function settle(turns: integer, swept: number): integer
+   local want = dial_turns(swept)
+   local s = turns > 0 and 1 or turns < 0 and -1 or 0
+   if s == 0 or want * s > turns * s then return want end
+   local back = dial_turns(swept + s * SLACK)
+   if back * s >= turns * s then return turns end
+   if back * s <= 0 then return want end -- back through the anchor: count from there
+   return back
+end
+
+--- The rotations a right-stick movement asks for, in order. Pushing the stick
+--- out sets an anchor; turning it round from there clockwise rotates the chunk
+--- clockwise, a first rotation after a small turn and one per sixth of a turn
+--- (to the nearest) after that, and turning back undoes them, a few degrees
+--- late so a stick held on a threshold stays put. Letting the
+--- stick go drops the anchor.
+function controls.dial_actions(seat: Seat, axis: string, value: number): {Action}
+   local out: {Action} = {}
+   local d = seat.dial
+   if not d then return out end
+   if axis == "rightx" then d.x = value elseif axis == "righty" then d.y = value else return out end
+   local r = math.sqrt(d.x * d.x + d.y * d.y)
+   if not d.on then
+      if r >= PUSH then d.on, d.last, d.swept, d.turns = true, angle(d.x, d.y), 0, 0 end
+      return out
+   end
+   if r < REST then
+      d.on = false
+      return out
+   end
+   -- Stick y points down, so the angle grows clockwise as seen.
+   local now = angle(d.x, d.y)
+   local step = (now - d.last + 180) % 360 - 180
+   d.last, d.swept = now, d.swept + step
+   local want = settle(d.turns, d.swept)
+   while d.turns < want do d.turns = d.turns + 1; out[#out + 1] = "turn_cw" end
+   while d.turns > want do d.turns = d.turns - 1; out[#out + 1] = "turn_ccw" end
+   return out
+end
+
 --- What to call the seat's controller on screen.
 function controls.label(seat: Seat): string
    if seat.kind == "keys" then return "keyboard" end
@@ -329,7 +408,7 @@ function controls.legend(kind: controls.Kind): {{string, string}}
    elseif kind == "pad" then
       return {
          { "X Y B", "pick chunk" },
-         { "LB / RB", "rotate" },
+         { "LB / RB / right stick", "rotate" },
          { "D-pad / stick", "slide, heading" },
          { "A", "fire now" },
          { "Back", "leave" },

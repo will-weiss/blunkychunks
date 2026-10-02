@@ -37,6 +37,7 @@ global record love
       push: function()
       pop: function()
       translate: function(number, number)
+      rotate: function(number)
       captureScreenshot: function(string)
    end
 
