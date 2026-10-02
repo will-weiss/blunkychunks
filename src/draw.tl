@@ -9,12 +9,15 @@ local sim = require("sim")
 local setup = require("setup")
 
 local record draw
-   --- Where and how big the board is on screen.
+   --- Where and how big the board is on screen, and which player's home is
+   --- at the bottom (`south`): the board is turned by `turn` radians.
    record View
       board: board.Board
       side: number
       cx: number
       cy: number
+      south: integer
+      turn: number
    end
 
    --- A floating bit of text, e.g. "x" where triangles cleared.
@@ -123,25 +126,31 @@ local function cache(v: View): Cache
    return c
 end
 
---- The board is drawn turned a twelfth of a turn anticlockwise from board
---- space, so Player 1's corner points straight down and the board's sides
---- stand upright, like a Tetris well with Player 1 at the bottom.
-local TURN <const> = -math.pi / 6
-local COS <const> = math.cos(TURN)
-local SIN <const> = math.sin(TURN)
-
---- A board-space vector turned as the board is drawn.
-local function turn(x: number, y: number): number, number
-   return x * COS - y * SIN, x * SIN + y * COS
+--- How far the board is turned as drawn, in sixths of a turn clockwise,
+--- for player `south`'s corner to point straight down and the board's sides
+--- to stand upright, like a Tetris well with that player at the bottom.
+--- Corner c points at 60c degrees in board space; straight down is 90.
+--- Player 1 at the bottom is a twelfth of a turn anticlockwise.
+function draw.spin(south: integer): number
+   return 1.5 - board.PLAYERS[south].corner
 end
 
---- Headings 1..6 as they point on screen, the board turned (cf.
---- board.HEADING_NAMES, which name them in board space).
-local HEADING_NAMES <const> = { "NE", "SE", "S", "SW", "NW", "N" }
+--- A board-space vector turned by `angle` radians.
+local function turn(angle: number, x: number, y: number): number, number
+   local c, s = math.cos(angle), math.sin(angle)
+   return x * c - y * s, x * s + y * c
+end
+
+--- Headings as they point on screen, by (heading - corner at the bottom)
+--- mod 6 (cf. board.HEADING_NAMES, which name them in board space).
+local SCREEN_HEADINGS <const> = { "SE", "S", "SW", "NW", "N", "NE" }
+
+--- Homes as they sit on screen, by (corner - corner at the bottom) / 2.
+local SCREEN_HOMES <const> = { "south", "northwest", "northeast" }
 
 --- Board space -> screen.
 function draw.screen(v: View, p: XY): number, number
-   local x, y = turn(p.x, p.y)
+   local x, y = turn(v.turn, p.x, p.y)
    return v.cx + x, v.cy + y
 end
 
@@ -150,7 +159,7 @@ end
 local function enter(v: View)
    love.graphics.push()
    love.graphics.translate(v.cx, v.cy)
-   love.graphics.rotate(TURN)
+   love.graphics.rotate(v.turn)
 end
 
 local function leave()
@@ -166,12 +175,15 @@ local function segment(s: board.Seg, ox: number, oy: number)
    love.graphics.line(s.x1 + ox, s.y1 + oy, s.x2 + ox, s.y2 + oy)
 end
 
---- The biggest view of board `B` that fits the rectangle, centred in it.
-function draw.layout(B: board.Board, x: number, y: number, w: number, h: number): View
+--- The biggest view of board `B` that fits the rectangle, centred in it,
+--- with player `south`'s home (Player 1's if left out) at the bottom.
+function draw.layout(B: board.Board, x: number, y: number, w: number, h: number, south?: integer): View
+   south = south or 1
+   local angle = draw.spin(south) * math.pi / 3
    local xmin, xmax, ymin, ymax = math.huge, -math.huge, math.huge, -math.huge
    for _, i in ipairs(B.cells) do
       for _, p in ipairs(board.corners(B.a[i], B.b[i], 1)) do
-         local px, py = turn(p.x, p.y)
+         local px, py = turn(angle, p.x, p.y)
          xmin, xmax = math.min(xmin, px), math.max(xmax, px)
          ymin, ymax = math.min(ymin, py), math.max(ymax, py)
       end
@@ -182,6 +194,8 @@ function draw.layout(B: board.Board, x: number, y: number, w: number, h: number)
       side = side,
       cx = x + w / 2 - (xmin + xmax) / 2 * side,
       cy = y + h / 2 - (ymin + ymax) / 2 * side,
+      south = south,
+      turn = angle,
    }
 end
 
@@ -303,7 +317,7 @@ function draw.ghost(v: View, ghost: sim.Ghost)
       -- Turned back, so the crosses stay upright on screen.
       love.graphics.push()
       love.graphics.translate(p.x, p.y)
-      love.graphics.rotate(-TURN)
+      love.graphics.rotate(-v.turn)
       love.graphics.line(-r, -r, r, r)
       love.graphics.line(-r, r, r, -r)
       love.graphics.pop()
@@ -386,9 +400,10 @@ local OUT_NOTE <const>: {sim.Out: string} = {
 --- aim. Nobody's bank shows here; a human's own is in their queue. `aims`
 --- holds what each player is aiming (bots and human alike), `clocks` the
 --- seconds left on each one's shot clock, `seats` who is playing each one.
-function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {number}, seats: {draw.Seat},
+function draw.panels(v: View, state: sim.State, aims: {integer: draw.Aim}, clocks: {number}, seats: {draw.Seat},
                      x: number, y: number, w: number, small: love.Font, big: love.Font)
    local h = 92
+   local bottom = board.PLAYERS[v.south].corner
    for p, pl in ipairs(board.PLAYERS) do
       local top = y + (p - 1) * (h + 12)
       local me = state.players[p]
@@ -402,7 +417,7 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {numbe
 
       love.graphics.setFont(big)
       color(pl.color)
-      local home = ({ "south", "northwest", "northeast" })[p]
+      local home = SCREEN_HOMES[(pl.corner - bottom) % 6 // 2 + 1]
       love.graphics.print(pl.name, x + 14, top + 10)
       love.graphics.setFont(small)
       color(MUTED)
@@ -435,7 +450,7 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {numbe
             note = human and "this chunk doesn't fit like this: rotate or take another" or "re-aiming"
             hue = human and DANGER or MUTED
          else
-            note = ("aiming %s, %s"):format(HEADING_NAMES[aim.heading], LOOK_NOTE[aim.look])
+            note = ("aiming %s, %s"):format(SCREEN_HEADINGS[(aim.heading - bottom) % 6 + 1], LOOK_NOTE[aim.look])
             hue = aim.look == "clear" and INK or aim.look == "home" and AMBER or DANGER
          end
          color(hue)
@@ -450,7 +465,7 @@ local function queued(v: View, cells: {bc.Cell}, owner: string, x: number, y: nu
    local xmin, xmax, ymin, ymax = math.huge, -math.huge, math.huge, -math.huge
    for _, c in ipairs(cells) do
       for _, p in ipairs(bc.cell_corners(c.a, c.b, 1)) do
-         local px, py = turn(p.x, p.y)
+         local px, py = turn(v.turn, p.x, p.y)
          xmin, xmax = math.min(xmin, px), math.max(xmax, px)
          ymin, ymax = math.min(ymin, py), math.max(ymax, py)
       end
@@ -458,7 +473,7 @@ local function queued(v: View, cells: {bc.Cell}, owner: string, x: number, y: nu
    local side = math.min(v.side, (w - 24) / (xmax - xmin), (h - 24) / (ymax - ymin))
    love.graphics.push()
    love.graphics.translate(x + w / 2 - (xmin + xmax) / 2 * side, y + h / 2 - (ymin + ymax) / 2 * side)
-   love.graphics.rotate(TURN)
+   love.graphics.rotate(v.turn)
    for _, c in ipairs(cells) do
       local p = bc.cell_corners(c.a, c.b, side)
       color(bc.FILL[c.color])

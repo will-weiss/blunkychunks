@@ -396,9 +396,10 @@ local ACROSS <const> = 30
 
 --- Which way player `p`'s corner points as drawn, in degrees clockwise from
 --- east as seen (y down), like the stick's own angle. draw.tl turns board
---- space a twelfth of a turn anticlockwise, and corner c points at 60c in it.
-local function corner_angle(p: integer): number
-   return 60 * board.PLAYERS[p].corner - 30
+--- space so player `south`'s corner points straight down (90), and corner c
+--- points at 60c in it.
+local function corner_angle(p: integer, south: integer): number
+   return 60 * (board.PLAYERS[p].corner - board.PLAYERS[south].corner) + 90
 end
 
 --- What a left-stick movement asks for: "flick" when it is let go while
@@ -408,8 +409,9 @@ end
 --- and leaving the chunk where it is. Whichever half it is in decides, so
 --- swinging back towards the home places again. Letting go after aiming is
 --- the flick. Let go, the chunk stays where it was placed; easing the stick
---- between the two thresholds changes nothing.
-function controls.flick_action(state: sim.State, seat: Seat, axis: string, value: number): Action
+--- between the two thresholds changes nothing. `south` is the player whose
+--- home is drawn at the bottom (Player 1 if left out).
+function controls.flick_action(state: sim.State, seat: Seat, axis: string, value: number, south?: integer): Action
    local f = seat.flick
    if not f then return nil end
    if axis == "leftx" then f.x = value elseif axis == "lefty" then f.y = value else return nil end
@@ -422,7 +424,7 @@ function controls.flick_action(state: sim.State, seat: Seat, axis: string, value
       return flicked and aim.pick and "flick" or nil
    end
    if r < PUSH then return nil end
-   local off = (angle(f.x, f.y) - corner_angle(seat.player) + 180) % 360 - 180
+   local off = (angle(f.x, f.y) - corner_angle(seat.player, south or 1) + 180) % 360 - 180
    f.aiming = math.abs(off) > HOME
    if not f.aiming then
       -- Clockwise from the corner as seen is the back wall's start.

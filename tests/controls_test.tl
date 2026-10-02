@@ -274,6 +274,28 @@ function T.the_left_stick_places_the_chunk_round_the_home()
    end
 end
 
+function T.with_your_home_drawn_at_the_bottom_the_stick_turns_with_it()
+   -- Player 2 at the south, as when they joined a networked match: straight
+   -- down is their home and straight up fires straight across.
+   local s = fresh()
+   local seat = controls.human(s, 2, "pad")
+   local aim = seat.aim
+   local function stick(x: number, y: number): controls.Action
+      local out: controls.Action
+      for i = 1, 20 do
+         out = controls.flick_action(s, seat, "leftx", seat.flick.x + (x - seat.flick.x) * i / 20, 2) or out
+         out = controls.flick_action(s, seat, "lefty", seat.flick.y + (y - seat.flick.y) * i / 20, 2) or out
+      end
+      return out
+   end
+   A.eq(stick(0, 1), nil, "down, at the home")
+   A.eq(aim.pick, (#aim.spots + 1) // 2 + (#aim.spots % 2 == 0 and 1 or 0), "places in the middle")
+   A.eq(stick(0, 0), nil, "let go")
+   A.eq(stick(-0.3, -1), nil, "up and a little left")
+   A.eq(aim.prefer, 2, "aims straight across")
+   A.eq(stick(0, 0), "flick", "and flicks")
+end
+
 function T.once_placed_anywhere_across_the_board_aims()
    -- Placed at the right of Player 1's home, then flicked up and to the
    -- left, northwest: lower than the heading itself, but still across.

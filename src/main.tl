@@ -187,13 +187,22 @@ local function new_game(seed: integer, picks?: {setup.Pick}): Game
    return g
 end
 
+--- The home to draw at the bottom: the first one played on this machine,
+--- so in a networked match you see your own home at the south whichever
+--- player you are. Player 1's if none is.
+local function south_of(seats: {controls.Seat}): integer
+   for p, seat in ipairs(seats) do
+      if seat.kind == "keys" or seat.kind == "pad" then return p end
+   end
+   return 1
+end
+
 --- A networked match starting (or arriving, for a late joiner): play the
 --- client's copy of it, seated as the lobby has it.
 local function online_game(cg: client.Game)
    local B = cg.state.board
    board_n, board_r, chunk_size = B.n, B.r, cg.config.size
    shot_seconds, flick_fires = cg.config.clock / 1000, cg.config.flick
-   view = draw.layout(B, 24, 92, BOARD_W, QUEUE_Y - 12 - 92)
    local g: Game = {
       state = cg.state,
       match = cg.m,
@@ -204,6 +213,7 @@ local function online_game(cg: client.Game)
       online = true,
    }
    g.seats = netplay.seats(net, cg.state)
+   view = draw.layout(B, 24, 92, BOARD_W, QUEUE_Y - 12 - 92, south_of(g.seats))
    check_over(g)
    game = g
    menu = nil
@@ -219,6 +229,10 @@ local function net_hooks(): client.Hooks
          if g and g.online then
             if net.c.lobby.running then
                g.seats = netplay.seats(net, g.state, g.seats)
+               local south = south_of(g.seats)
+               if south ~= view.south then
+                  view = draw.layout(g.state.board, 24, 92, BOARD_W, QUEUE_Y - 12 - 92, south)
+               end
             else
                game = nil
                if net.srv then
@@ -739,7 +753,7 @@ function love.draw()
    end
    local clocks: {number} = {}
    for p = 1, #s.players do clocks[p] = match.left(m, p, clock_time) / 1000 end
-   draw.panels(s, aims, clocks, tags, SIDE_X, 18 + draw.controls_height(groups, SIDE_W, fonts.small, true) + 18,
+   draw.panels(view, s, aims, clocks, tags, SIDE_X, 18 + draw.controls_height(groups, SIDE_W, fonts.small, true) + 18,
       SIDE_W, fonts.small, fonts.big)
 
    -- Each human's queue: the bank chunks either side of the one in use,
@@ -939,7 +953,7 @@ function love.gamepadaxis(pad: love.Joystick, axis: string, value: number)
    local seat = seat_of(game, "pad", pad)
    if not seat then return end
    for _, turn in ipairs(controls.dial_actions(seat, axis, value)) do seat_action(game, seat, turn) end
-   local action = controls.flick_action(game.state, seat, axis, value)
+   local action = controls.flick_action(game.state, seat, axis, value, view.south)
    if action then seat_action(game, seat, action) end
 end
 
