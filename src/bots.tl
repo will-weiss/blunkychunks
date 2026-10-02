@@ -49,10 +49,13 @@ function bots.choose(state: sim.State, p: integer, blocked: {string: boolean}): 
 end
 
 --- Every bot's shot for this turn. Bots place in random order and each sees
---- the earlier placements, so no two shots overlap.
-function bots.plan(state: sim.State): {sim.Shot}
+--- the earlier placements, so no two shots overlap. Players in `skip` (e.g. a
+--- human) are left out.
+function bots.plan(state: sim.State, skip?: {integer: boolean}): {sim.Shot}
    local order: {integer} = {}
-   for p = 1, #state.players do order[p] = p end
+   for p = 1, #state.players do
+      if not (skip and skip[p]) then order[#order + 1] = p end
+   end
    shuffle(order, state.rng)
 
    local shots: {sim.Shot} = {}

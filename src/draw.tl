@@ -27,6 +27,12 @@ local record draw
       life: number
    end
 
+   --- A titled row of { key, what it does } pairs for the on-screen legend.
+   record KeyGroup
+      title: string
+      keys: {{string, string}}
+   end
+
    INK: string
    MUTED: string
 end
@@ -197,8 +203,10 @@ function draw.thumb(cells: {Cell}, x: number, y: number, side: number, owner: st
 end
 
 --- Player panels down the right-hand side: name, HP, bank, this turn's shot.
+--- `human`, if set, is the player at the keyboard: their panel says so and
+--- numbers their bank slots.
 function draw.panels(state: sim.State, pending: {sim.Shot}, placing: boolean, x: number, y: number, w: number,
-                     small: love.Font, big: love.Font)
+                     small: love.Font, big: love.Font, human?: integer)
    local h = 200
    for p, pl in ipairs(board.PLAYERS) do
       local top = y + (p - 1) * (h + 16)
@@ -212,7 +220,7 @@ function draw.panels(state: sim.State, pending: {sim.Shot}, placing: boolean, x:
 
       love.graphics.setFont(big)
       color(pl.color)
-      love.graphics.print(pl.name, x + 14, top + 10)
+      love.graphics.print(p == human and pl.name .. " (you)" or pl.name, x + 14, top + 10)
 
       local hp = me.hp
       color(hp > 0 and INK or "#b23a3a")
@@ -247,6 +255,10 @@ function draw.panels(state: sim.State, pending: {sim.Shot}, placing: boolean, x:
          color("#ffffff", 0.6)
          love.graphics.rectangle("fill", bx + 2, by, slot_w - 4, 84, 6, 6)
          draw.thumb(me.bank[i], bx + slot_w / 2, by + 42, 8, pl.color, 1)
+         if p == human then
+            color(firing == i and pl.color or MUTED)
+            love.graphics.print(tostring(i), bx + 8, by + 4)
+         end
       end
 
       color(MUTED)
@@ -259,6 +271,38 @@ function draw.panels(state: sim.State, pending: {sim.Shot}, placing: boolean, x:
          end
       end
       love.graphics.print(note, x + 14, top + 176)
+   end
+end
+
+--- The key legend: each group starts a new line with its title, then key
+--- chips with their descriptions, wrapping within `w`.
+function draw.controls(groups: {draw.KeyGroup}, x: number, y: number, w: number, font: love.Font)
+   love.graphics.setFont(font)
+   local line_h = font:getHeight() + 10
+   local cy = y
+   for _, group in ipairs(groups) do
+      color(INK)
+      love.graphics.print(group.title, x, cy + 3)
+      local indent = x + 110
+      local cx = indent
+      for _, k in ipairs(group.keys) do
+         local kw = font:getWidth(k[1]) + 12
+         local item = kw + 6 + font:getWidth(k[2]) + 18
+         if cx > indent and cx + item > x + w then
+            cx, cy = indent, cy + line_h
+         end
+         color("#ffffff")
+         love.graphics.rectangle("fill", cx, cy, kw, font:getHeight() + 6, 4, 4)
+         color(GRID)
+         love.graphics.setLineWidth(1)
+         love.graphics.rectangle("line", cx, cy, kw, font:getHeight() + 6, 4, 4)
+         color(INK)
+         love.graphics.print(k[1], cx + 6, cy + 3)
+         color(MUTED)
+         love.graphics.print(k[2], cx + kw + 6, cy + 3)
+         cx = cx + item
+      end
+      cy = cy + line_h
    end
 end
 

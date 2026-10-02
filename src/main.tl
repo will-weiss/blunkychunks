@@ -1,12 +1,13 @@
---- Blunkychunks in LOVE: three random bots play each other.
+--- Blunkychunks in LOVE: you play Player 1 against two random bots, or (with
+--- --bots) three bots play each other.
 ---
----   make run                       # build and launch
+---   make run                       # build and launch, you are Player 1
+---   make bots                      # build and launch an all-bot match
 ---   make run ARGS="--seed 42"      # a reproducible match
 ---   make run ARGS="--fast"         # 1 second placement phase
 ---   make run ARGS="--shot out.png" # screenshot after a few seconds, then quit
 ---
---- Keys: space skips the countdown, +/- change slide speed, R restarts,
---- escape quits.
+--- Keys are listed on screen (see `controls`).
 
 local bc = require("blunkychunks")
 local board = require("board")
@@ -41,6 +42,14 @@ local record Game
    stalemate: boolean
    shot_path: string
    shot_after: number
+
+   -- The human's pick for this turn (Player 1 unless --bots).
+   human: boolean
+   sel_slot: integer
+   sel_wall: integer
+   spots: {bc.AB}
+   sel_spot: integer
+   passing: boolean
 end
 
 local N <const> = 11
@@ -48,21 +57,83 @@ local SIZE <const> = 14
 local PLACE_SECONDS <const> = 8.0
 local STEP_SECONDS <const> = 0.28
 
+local HUMAN <const> = 1
+
 local view: draw.View = { n = N, side = 30, cx = 400, cy = 400 }
 local fonts: Fonts
 local game: Game
 local place_seconds = PLACE_SECONDS
+local human_mode = true
+
+--- Recompute where the human's selected chunk fits against the selected wall,
+--- ordered left to right on screen (screen x grows with b). Keeps the spot
+--- nearest the previous one when there was one.
+local function refresh_spots(g: Game)
+   local prev = g.spots and g.spots[g.sel_spot]
+   local wall = board.launch_walls(HUMAN, g.state.turn)[g.sel_wall]
+   local chunk = g.state.players[HUMAN].bank[g.sel_slot]
+   local spots = board.placements(N, chunk, wall, sim.blocked_set(g.state, g.pending))
+   table.sort(spots, function(x: bc.AB, y: bc.AB): boolean
+      if x.b ~= y.b then return x.b < y.b end
+      return x.a < y.a
+   end)
+   g.spots = spots
+   g.sel_spot = math.max(1, math.floor((#spots + 1) / 2))
+   if prev then
+      local best = math.huge
+      for i, t in ipairs(spots) do
+         local d = math.abs(t.b - prev.b)
+         if d < best then best, g.sel_spot = d, i end
+      end
+   end
+end
+
+--- The human's shot as currently selected, or nil if passing / nothing fits.
+local function human_shot(g: Game): sim.Shot
+   if not g.human or g.passing or g.phase ~= "placing" then return nil end
+   local t = g.spots[g.sel_spot]
+   if not t then return nil end
+   return {
+      player = HUMAN,
+      wall = board.launch_walls(HUMAN, g.state.turn)[g.sel_wall],
+      slot = g.sel_slot,
+      cells = board.translate(g.state.players[HUMAN].bank[g.sel_slot], t),
+   }
+end
+
+--- Bot shots plus the human's, i.e. everything that fires on lock-in.
+local function all_shots(g: Game): {sim.Shot}
+   local out: {sim.Shot} = {}
+   for i, shot in ipairs(g.pending) do out[i] = shot end
+   local mine = human_shot(g)
+   if mine then out[#out + 1] = mine end
+   return out
+end
+
+--- Start the human's turn on the first chunk/wall that fits, own wall first.
+local function begin_human(g: Game)
+   g.passing = false
+   g.spots = nil
+   for _, w in ipairs({ g.sel_wall or 1, 3 - (g.sel_wall or 1) }) do
+      for slot = 1, sim.BANK do
+         g.sel_slot, g.sel_wall = slot, w
+         refresh_spots(g)
+         if #g.spots > 0 then return end
+      end
+   end
+end
 
 --- Start a placement phase. If nobody can place anything and the last slide
 --- moved nothing either, the board is jammed for good: call it a stalemate.
 local function begin_placing(g: Game)
-   g.pending = bots.plan(g.state)
-   if #g.pending == 0 and g.phase_moves == 0 and #g.state.chunks > 0 then
+   g.pending = bots.plan(g.state, g.human and { [HUMAN] = true } or nil)
+   g.phase = "placing"
+   if g.human then begin_human(g) end
+   if #all_shots(g) == 0 and g.phase_moves == 0 and #g.state.chunks > 0 then
       g.phase = "over"
       g.stalemate = true
       return
    end
-   g.phase = "placing"
    g.timer = place_seconds
 end
 
@@ -79,6 +150,7 @@ local function new_game(seed: integer): Game
       effects = {},
       phase_moves = -1,
       stalemate = false,
+      human = human_mode,
    }
    begin_placing(g)
    return g
@@ -125,7 +197,7 @@ local function do_tick(g: Game)
 end
 
 local function lock_in(g: Game)
-   sim.fire(g.state, g.pending)
+   sim.fire(g.state, all_shots(g))
    g.pending = {}
    g.phase = "sliding"
    g.tick_timer = 0
@@ -143,6 +215,7 @@ function love.load(args: {string})
    }
    local seed = tonumber(flag(args, "--seed") or "") or os.time()
    if flag(args, "--fast") then place_seconds = 1.0 end
+   if flag(args, "--bots") then human_mode = false end
    local shot = flag(args, "--shot")
    game = new_game(math.floor(seed))
    if shot then
@@ -183,6 +256,34 @@ local function turn_label(turn: board.Turn): string
    return turn == "A" and "Turn A - clockwise" or "Turn B - counterclockwise"
 end
 
+--- Every key the game listens to, grouped for the on-screen legend.
+local function controls(g: Game): {draw.KeyGroup}
+   local groups: {draw.KeyGroup} = {}
+   if g.human then
+      groups[#groups + 1] = {
+         title = "You (" .. board.PLAYERS[HUMAN].name .. ")",
+         keys = {
+            { "1 2 3", "pick chunk" },
+            { "W / Tab", "own / loaned wall" },
+            { "Left Right / A D", "slide along wall" },
+            { "X", g.passing and "unpass" or "pass" },
+            { "Space / Enter", "fire now" },
+         },
+      }
+   else
+      groups[#groups + 1] = { title = "Bots", keys = { { "Space", "skip countdown" } } }
+   end
+   groups[#groups + 1] = {
+      title = "Game",
+      keys = {
+         { "+ / -", "slide speed" },
+         { "R", "new match" },
+         { "Esc", "quit" },
+      },
+   }
+   return groups
+end
+
 function love.draw()
    local g = game
    local s = g.state
@@ -201,12 +302,14 @@ function love.draw()
       draw.chunk(view, chunk.cells, ox, oy, 1, board.PLAYERS[chunk.owner].color)
    end
 
-   -- Pending shots as ghosts with their headings.
+   -- Pending shots as ghosts with their headings; the human's stands out.
+   local shots = all_shots(g)
    if g.phase == "placing" then
-      for _, shot in ipairs(g.pending) do
+      for _, shot in ipairs(shots) do
          local owner = board.PLAYERS[shot.player].color
-         draw.chunk(view, shot.cells, 0, 0, 0.45, owner)
-         draw.arrow(view, shot.cells, board.fire_dir(shot.player, s.turn), owner, 0.8)
+         local mine = g.human and shot.player == HUMAN
+         draw.chunk(view, shot.cells, 0, 0, mine and 0.75 or 0.45, owner)
+         draw.arrow(view, shot.cells, board.fire_dir(shot.player, s.turn), owner, mine and 1 or 0.8)
       end
    end
 
@@ -233,9 +336,15 @@ function love.draw()
       status = "game over"
    end
    love.graphics.print(status, 24, 52)
-   love.graphics.print(("seed %d   step %.2fs (+/-)   R restart"):format(g.seed, g.step_seconds), 24, 770)
 
-   draw.panels(s, g.pending, g.phase == "placing", 830, 100, 420, fonts.small, fonts.big)
+   draw.controls(controls(g), 24, 704, 780, fonts.small)
+   rr, gg, bb = draw.rgb(draw.MUTED)
+   love.graphics.setColor(rr, gg, bb)
+   love.graphics.setFont(fonts.small)
+   love.graphics.print(("seed %d   step %.2fs"):format(g.seed, g.step_seconds), 1060, 770)
+
+   draw.panels(s, shots, g.phase == "placing", 830, 100, 420, fonts.small, fonts.big,
+      g.human and HUMAN or nil)
 
    if g.phase == "over" then
       love.graphics.setColor(1, 1, 1, 0.75)
@@ -258,8 +367,34 @@ function love.draw()
    end
 end
 
+--- Placement keys for the human. Returns true if the key was handled.
+local function human_key(g: Game, key: string): boolean
+   if not g.human or g.phase ~= "placing" then return false end
+   local slot = tonumber(key) or tonumber(key:match("^kp(%d)$") or "")
+   if slot and slot >= 1 and slot <= sim.BANK then
+      g.sel_slot, g.passing = math.floor(slot), false
+      refresh_spots(g)
+   elseif key == "w" or key == "tab" then
+      g.sel_wall, g.passing = 3 - g.sel_wall, false
+      g.spots = nil
+      refresh_spots(g)
+   elseif key == "left" or key == "a" then
+      g.sel_spot, g.passing = math.max(1, g.sel_spot - 1), false
+   elseif key == "right" or key == "d" then
+      g.sel_spot, g.passing = math.min(math.max(1, #g.spots), g.sel_spot + 1), false
+   elseif key == "x" then
+      g.passing = not g.passing
+   elseif key == "return" or key == "kpenter" then
+      lock_in(g)
+   else
+      return false
+   end
+   return true
+end
+
 function love.keypressed(key: string)
    local g = game
+   if human_key(g, key) then return end
    if key == "escape" then
       love.event.quit()
    elseif key == "space" and g.phase == "placing" then

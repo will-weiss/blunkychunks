@@ -1,7 +1,8 @@
 # Blunkychunks build.
 #
 #   make          compile every .tl into build/ as Lua 5.1
-#   make run      compile, then launch the game in LOVE
+#   make run      compile, then launch the game in LOVE (you are Player 1)
+#   make bots     compile, then launch an all-bot match
 #   make check    type-check all Teal sources (game + tests)
 #   make test     run the rules-engine tests under the system Lua
 #   make clean    remove build/
@@ -20,7 +21,7 @@ TESTS  := $(wildcard tests/*.tl)
 LUA := $(patsubst %.tl,$(OUT)/%.lua,$(SHARED)) \
        $(patsubst src/%.tl,$(OUT)/%.lua,$(GAME))
 
-.PHONY: all game run check test clean
+.PHONY: all game run bots check test clean
 
 all: game
 
@@ -37,6 +38,9 @@ $(OUT)/%.lua: %.tl | $(OUT)
 
 run: game
 	$(LOVE) $(OUT) $(ARGS)
+
+bots: game
+	$(LOVE) $(OUT) --bots $(ARGS)
 
 check:
 	$(TL) check $(SHARED) $(GAME) $(TESTS)
