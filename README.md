@@ -160,7 +160,7 @@ The game is written in Teal and runs in LÖVE 11.4.
 
 | Command                       | What it does                                           |
 | ----------------------------- | ------------------------------------------------------ |
-| `make run`                    | play as Player 1 against two random bots               |
+| `make run`                    | open the setup screen, then play (`ARGS="--play"` skips it: you as Player 1 against two bots) |
 | `make bots`                   | watch three bots play each other                       |
 | `make run DIAMETER=12 NOTCH=5` | play on another size of board (also for `bots`, `soak`, `images`) |
 | `make run ARGS="--seed 42"`   | a reproducible match; `--fast` for a 2 second clock, `--size 8` for smaller chunks |
@@ -178,9 +178,16 @@ The game is written in Teal and runs in LÖVE 11.4.
 | `Space` / `Enter`  | fire now: every clock skips ahead to when yours runs out, so any due sooner fire first (watching `make bots`, `Space` skips to the next shot) |
 | `+` / `-`          | slide faster / slower               |
 | `R`                | new match                           |
-| `Esc`              | quit                                |
+| `Esc`              | back to the setup screen            |
 
-Gamepads can play too, as many as there are bots to take over: press `Start`
+A match starts from the setup screen: pick the board, chunk size and shot
+clock, and who plays each home. Every controller shares one cursor: `↑` `↓`
+choose a row, `←` `→` change it (on a player's row, cycling between a bot, the
+keyboard and each plugged-in gamepad), and `Enter` starts the match (`Esc`
+quits). A gamepad can press `Start` to take the first home a bot has, `Start`
+again to begin, and `B` or `Back` to give the home back.
+
+Gamepads can play during a match too, as many as there are bots to take over: press `Start`
 on one to take the first bot's home, and `Back` (or unplugging it) hands that
 home back to a bot. The legend at the bottom of the screen lists the keys and
 buttons for every controller in play.
@@ -193,6 +200,8 @@ buttons for every controller in play.
 | D-pad or stick ↑ ↓   | change heading                       |
 | `A`                  | fire now                             |
 | `Start` / `Back`     | join / leave                         |
+
+Holding a slide or a rotate, on the keyboard or a gamepad, keeps it going.
 
 ## Ideas
 

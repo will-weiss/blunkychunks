@@ -56,6 +56,7 @@ local record controls
       kind: Kind
       pad: love.Joystick -- the gamepad, for kind "pad"
       stick: {string: integer} -- per stick axis: -1, 0 or 1, the way it was last pushed
+      held: {Action: number} -- repeating actions held down: seconds to their next repeat
       aim: Aim -- humans
       plan: sim.Shot -- bots: what they will fire
    end
@@ -147,7 +148,7 @@ end
 
 --- A human seat for player `p`, on the keyboard or on gamepad `pad`.
 function controls.human(state: sim.State, p: integer, kind: controls.Kind, pad?: love.Joystick): Seat
-   local seat: Seat = { player = p, kind = kind, pad = pad, stick = {}, aim = { slot = 1, turn = 0, heading = 2 } }
+   local seat: Seat = { player = p, kind = kind, pad = pad, stick = {}, held = {}, aim = { slot = 1, turn = 0, heading = 2 } }
    refresh_aim(state, seat)
    return seat
 end
@@ -247,16 +248,56 @@ end
 local PUSH <const> = 0.6
 local REST <const> = 0.3
 
---- The action a stick movement asks for, if any: one per push, so holding
---- the stick over doesn't repeat. `seat.stick` remembers each axis's push.
+--- Actions that repeat while held, how long a hold waits before the first
+--- repeat, and how often it repeats after that, in seconds.
+local REPEATS <const>: {Action: boolean} = { left = true, right = true, turn_ccw = true, turn_cw = true }
+local DELAY <const> = 0.25
+local RATE <const> = 0.08
+
+--- `action` was pressed: if it repeats, start its clock.
+function controls.hold(seat: Seat, action: Action)
+   if seat.held and action and REPEATS[action] then seat.held[action] = DELAY end
+end
+
+--- `action` was let go: stop repeating it.
+function controls.release(seat: Seat, action: Action)
+   if seat.held and action then seat.held[action] = nil end
+end
+
+--- The repeats due from held actions `dt` seconds on, in order.
+function controls.repeats(seat: Seat, dt: number): {Action}
+   local out: {Action} = {}
+   if not seat.held then return out end
+   for action, left in pairs(seat.held) do
+      left = left - dt
+      while left <= 0 do
+         out[#out + 1] = action
+         left = left + RATE
+      end
+      seat.held[action] = left
+   end
+   return out
+end
+
+local function stick_action(axis: string, dir: integer): Action
+   if axis == "leftx" then return dir < 0 and "left" or "right" end
+   return dir < 0 and "heading_next" or "heading_prev"
+end
+
+--- The action a stick movement asks for, if any: one per push, after which
+--- holding the stick over repeats it as a held button would (see `repeats`).
+--- `seat.stick` remembers each axis's push.
 function controls.axis_action(seat: Seat, axis: string, value: number): Action
    if axis ~= "leftx" and axis ~= "lefty" then return nil end
    local was = seat.stick[axis] or 0
    local now = value >= PUSH and 1 or value <= -PUSH and -1 or math.abs(value) < REST and 0 or was
    seat.stick[axis] = now
-   if now == was or now == 0 then return nil end
-   if axis == "leftx" then return now < 0 and "left" or "right" end
-   return now < 0 and "heading_next" or "heading_prev"
+   if now == was then return nil end
+   if was ~= 0 then controls.release(seat, stick_action(axis, was)) end
+   if now == 0 then return nil end
+   local action = stick_action(axis, now)
+   controls.hold(seat, action)
+   return action
 end
 
 --- What to call the seat's controller on screen.

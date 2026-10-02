@@ -6,6 +6,7 @@
 local bc = require("blunkychunks")
 local board = require("board")
 local sim = require("sim")
+local setup = require("setup")
 
 local record draw
    --- Where and how big the board is on screen.
@@ -481,6 +482,47 @@ function draw.controls(groups: {draw.KeyGroup}, x: number, bottom: number, w: nu
       color(MUTED)
       love.graphics.print(c.what, c.x + kw + 6, cy + 3)
    end
+end
+
+--- The setup screen's rows from `x`, `y`, `w` wide: each a label and its
+--- value, the one under the cursor highlighted with arrows either side of
+--- its value, and the last (Start) drawn as a button.
+function draw.setup(lines: {setup.Line}, cursor: integer, x: number, y: number, w: number,
+                    body: love.Font, big: love.Font)
+   local h, gap = 50, 8
+   for i, line in ipairs(lines) do
+      local top = y + (i - 1) * (h + gap)
+      if i == #lines then top = top + 18 end
+      local here = i == cursor
+      local hue = line.color or INK
+      if i == #lines then
+         color(here and INK or "#ffffff")
+         love.graphics.rectangle("fill", x, top, w, h, 8, 8)
+         color(INK)
+         love.graphics.setLineWidth(2)
+         love.graphics.rectangle("line", x, top, w, h, 8, 8)
+         love.graphics.setFont(big)
+         if here then love.graphics.setColor(1, 1, 1) end
+         love.graphics.printf(line.label, x, top + (h - big:getHeight()) / 2, w, "center")
+      else
+         if line.color then
+            color(line.color, here and 0.18 or 0.08)
+         else
+            color(here and AMBER or "#ffffff", here and 0.18 or 0.6)
+         end
+         love.graphics.rectangle("fill", x, top, w, h, 8, 8)
+         color(here and hue or GRID)
+         love.graphics.setLineWidth(here and 2 or 1)
+         love.graphics.rectangle("line", x, top, w, h, 8, 8)
+         love.graphics.setFont(big)
+         color(hue)
+         love.graphics.print(line.label, x + 16, top + (h - big:getHeight()) / 2)
+         local value = here and ("<   %s   >"):format(line.value) or line.value
+         color(here and INK or MUTED)
+         love.graphics.print(value, x + w - 16 - big:getWidth(value), top + (h - big:getHeight()) / 2)
+      end
+   end
+   love.graphics.setFont(body)
 end
 
 --- Floating text effects.
