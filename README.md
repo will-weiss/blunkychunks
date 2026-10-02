@@ -184,8 +184,11 @@ A match starts from the setup screen: pick the board, chunk size and shot
 clock, and who plays each home. Every controller shares one cursor: `↑` `↓`
 choose a row, `←` `→` change it (on a player's row, cycling between a bot, the
 keyboard and each plugged-in gamepad), and `Enter` starts the match (`Esc`
-quits). A gamepad can press `Start` to take the first home a bot has, `Start`
-again to begin, and `B` or `Back` to give the home back.
+quits). Any gamepad drives the same cursor with its D-pad or stick, seated or
+not, and `A` selects the row: it steps an option on, sits that gamepad at a
+player's row, or starts the match from Start. A gamepad can also press `Start`
+to take the first home a bot has, `Start` again to begin, and `B` or `Back` to
+give the home back.
 
 Gamepads can play during a match too, as many as there are bots to take over: press `Start`
 on one to take the first bot's home, and `Back` (or unplugging it) hands that

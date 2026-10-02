@@ -73,6 +73,19 @@ function T.cycling_a_row_moves_a_controller_rather_than_copying_it()
    A.eq(s.picks[2].pad, pad1, "and back")
 end
 
+function T.a_press_selects_the_row_under_the_cursor()
+   local s = fresh()
+   s.cursor = 1
+   A.eq(setup.press(s, pad1, { pad1 }), false, "an option doesn't start")
+   A.eq(s.board, 5, "steps the board on")
+   s.cursor = 5
+   A.eq(setup.press(s, pad1, { pad1 }), false, "a player's row doesn't start")
+   A.eq(s.picks[2].pad, pad1, "sits the pad at Player 2")
+   A.eq(s.picks[1].kind, "keys", "keyboard stays on Player 1")
+   s.cursor = 7
+   A.truthy(setup.press(s, pad2, { pad1, pad2 }), "Start starts, seated or not")
+end
+
 function T.lines_name_every_row()
    local s = fresh()
    setup.join(s, pad1)
