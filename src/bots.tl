@@ -1,8 +1,9 @@
---- Random bots. Each turn a bot picks a chunk from its bank, one of its two
---- legal walls, and a spot along that wall, all uniformly at random. If the
---- pick does not fit it tries its other chunk/wall combinations in random
---- order, and passes if nothing fits anywhere.
+--- Random bots. A bot tries its chunks and rotations in random order and a
+--- few random spots for each, trying all three headings at every spot. It
+--- takes the first shot whose ghost lands clear. Failing that it takes one that
+--- lands in its own home, and fires on itself only when nothing else fits.
 
+local bc = require("blunkychunks")
 local board = require("board")
 local sim = require("sim")
 
@@ -11,8 +12,13 @@ end
 
 local record Option
    slot: integer
-   wall: integer
+   turn: integer
 end
+
+--- Random spots tried per chunk and rotation.
+local TRIES <const> = 4
+
+local RANK <const>: {sim.Look: integer} = { clear = 3, home = 2, friendly = 1 }
 
 local function shuffle<T>(list: {T}, rng: function(): number)
    for i = #list, 2, -1 do
@@ -21,49 +27,55 @@ local function shuffle<T>(list: {T}, rng: function(): number)
    end
 end
 
---- One player's shot, or nil when no chunk in their bank fits.
-function bots.choose(state: sim.State, p: integer, blocked: {string: boolean}): sim.Shot
-   local player = state.players[p]
+--- Player `p`'s shot, or nil when nothing in their bank fits anywhere.
+function bots.choose(state: sim.State, p: integer): sim.Shot
+   local B, rng = state.board, state.rng
+   local bank = state.players[p].bank
    local options: {Option} = {}
-   for slot = 1, #player.bank do
-      for _, wall in ipairs(board.launch_walls(p, state.turn)) do
-         options[#options + 1] = { slot = slot, wall = wall }
-      end
+   for slot = 1, #bank do
+      for turn = 0, 5 do options[#options + 1] = { slot = slot, turn = turn } end
    end
-   shuffle(options, state.rng)
+   shuffle(options, rng)
 
+   local best: sim.Shot = nil
+   local best_rank = 0
    for _, opt in ipairs(options) do
-      local chunk = player.bank[opt.slot]
-      local spots = board.placements(state.n, chunk, opt.wall, blocked)
-      if #spots > 0 then
-         local t = spots[math.floor(state.rng() * #spots) + 1]
-         return {
-            player = p,
-            wall = opt.wall,
-            slot = opt.slot,
-            cells = board.translate(chunk, t),
-         }
+      local shape = board.shape(B, bc.rotate(bank[opt.slot], opt.turn))
+      local spots = sim.placements(state, p, shape)
+      for _ = 1, math.min(TRIES, #spots) do
+         local spot = spots[math.floor(rng() * #spots) + 1]
+         local cells = board.place(B, shape, spot.x, spot.y)
+         local headings: {integer} = {}
+         for k, h in ipairs(board.HEADINGS[p]) do headings[k] = h end
+         shuffle(headings, rng)
+         for _, h in ipairs(headings) do
+            local rank = RANK[sim.ghost(state, p, cells, h).look]
+            if rank > best_rank then
+               best, best_rank = { player = p, slot = opt.slot, heading = h, cells = cells }, rank
+               if rank == RANK.clear then return best end
+            end
+         end
       end
    end
-   return nil
+   return best
 end
 
---- Every bot's shot for this turn. Bots place in random order and each sees
---- the earlier placements, so no two shots overlap. Players in `skip` (e.g. a
---- human) are left out.
-function bots.plan(state: sim.State, skip?: {integer: boolean}): {sim.Shot}
-   local order: {integer} = {}
-   for p = 1, #state.players do
-      if not (skip and skip[p]) then order[#order + 1] = p end
-   end
-   shuffle(order, state.rng)
-
-   local shots: {sim.Shot} = {}
-   for _, p in ipairs(order) do
-      local shot = bots.choose(state, p, sim.blocked_set(state, shots))
-      if shot then shots[#shots + 1] = shot end
+--- Every live bot's shot, by player, leaving out players in `skip` (e.g. a
+--- human). Bots with nothing that fits have no shot.
+function bots.plan(state: sim.State, skip?: {integer: boolean}): {integer: sim.Shot}
+   local shots: {integer: sim.Shot} = {}
+   for p, pl in ipairs(state.players) do
+      if pl.alive and not (skip and skip[p]) then shots[p] = bots.choose(state, p) end
    end
    return shots
+end
+
+--- Bot `p`'s planned `shot` again as their shot clock runs out: chunks have
+--- moved since it was planned, so if it no longer fits (or there was none)
+--- the bot chooses afresh.
+function bots.refresh(state: sim.State, p: integer, shot: sim.Shot): sim.Shot
+   if shot and sim.legal(state, p, shot.cells) then return shot end
+   return bots.choose(state, p)
 end
 
 return bots

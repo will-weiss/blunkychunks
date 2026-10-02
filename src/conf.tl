@@ -4,8 +4,8 @@ function love.conf(t: love.Conf)
    t.identity = "blunkychunks"
    t.version = "11.4"
    t.window.title = "Blunkychunks"
-   t.window.width = 1280
-   t.window.height = 800
+   t.window.width = 1440
+   t.window.height = 900
    t.window.vsync = 1
    t.window.resizable = false
    t.window.highdpi = true

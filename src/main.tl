@@ -1,25 +1,26 @@
---- Blunkychunks in LOVE: you play Player 1 against two random bots, or (with
---- --bots) three bots play each other.
+--- Blunkychunks in LOVE: you play Player 1 (the southwest home) on the
+--- keyboard against two random bots, or with --bots three bots play each
+--- other. A gamepad joins by pressing Start, taking over the first bot's home,
+--- and Back hands it back; several can play at once (see controls.tl).
 ---
----   make run                       # build and launch, you are Player 1
----   make bots                      # build and launch an all-bot match
----   make run ARGS="--seed 42"      # a reproducible match
----   make run ARGS="--fast"         # 1 second placement phase
----   make run ARGS="--shot out.png" # screenshot after a few seconds, then quit
+---   make run                          # build and launch on the 22-8 board
+---   make run DIAMETER=12 NOTCH=5      # any other notched board
+---   make bots                         # an all-bot match
+---   make run ARGS="--seed 42"         # a reproducible match
+---   make run ARGS="--fast"            # a 2 second shot clock
+---   make run ARGS="--size 8"          # chunks of 8 triangles
+---   make run ARGS="--shot out.png"    # screenshot after a few seconds, then quit
 ---
---- Keys are listed on screen (see `controls`).
+--- Play is continuous: chunks slide one step per tick while every player's
+--- shot clock counts down. The clocks are staggered, so they run out in turn,
+--- and each time one does that player's aim fires. Keys and buttons are
+--- listed on screen (see `legend`).
 
 local bc = require("blunkychunks")
 local board = require("board")
 local sim = require("sim")
-local bots = require("bots")
+local controls = require("controls")
 local draw = require("draw")
-
-local enum Phase
-   "placing"
-   "sliding"
-   "over"
-end
 
 local record Fonts
    small: love.Font
@@ -30,129 +31,126 @@ end
 
 local record Game
    state: sim.State
-   phase: Phase
-   timer: number
-   pending: {sim.Shot}
+   over: boolean
+   clocks: {number} -- per player: seconds left on their shot clock
    tick_timer: number
    step_seconds: number
    seed: integer
-   winner: integer
    effects: {draw.Effect}
-   phase_moves: integer
-   stalemate: boolean
+   seats: {controls.Seat} -- per player: who plays them
    shot_path: string
    shot_after: number
-
-   -- The human's pick for this turn (Player 1 unless --bots).
-   human: boolean
-   sel_slot: integer
-   sel_wall: integer
-   spots: {bc.AB}
-   sel_spot: integer
-   passing: boolean
 end
 
-local N <const> = 11
-local SIZE <const> = 14
-local PLACE_SECONDS <const> = 8.0
+local SHOT_SECONDS <const> = 8.0
 local STEP_SECONDS <const> = 0.28
 
-local HUMAN <const> = 1
-
-local view: draw.View = { n = N, side = 30, cx = 400, cy = 400 }
+local view: draw.View
 local fonts: Fonts
 local game: Game
-local place_seconds = PLACE_SECONDS
-local human_mode = true
+local shot_seconds = SHOT_SECONDS
+local keyboard = true -- whether the keyboard starts out playing Player 1
+local board_n, board_r = 11, 8
+local chunk_size = 14
 
---- Recompute where the human's selected chunk fits against the selected wall,
---- ordered left to right on screen (screen x grows with b). Keeps the spot
---- nearest the previous one when there was one.
-local function refresh_spots(g: Game)
-   local prev = g.spots and g.spots[g.sel_spot]
-   local wall = board.launch_walls(HUMAN, g.state.turn)[g.sel_wall]
-   local chunk = g.state.players[HUMAN].bank[g.sel_slot]
-   local spots = board.placements(N, chunk, wall, sim.blocked_set(g.state, g.pending))
-   table.sort(spots, function(x: bc.AB, y: bc.AB): boolean
-      if x.b ~= y.b then return x.b < y.b end
-      return x.a < y.a
-   end)
-   g.spots = spots
-   g.sel_spot = math.max(1, math.floor((#spots + 1) / 2))
-   if prev then
-      local best = math.huge
-      for i, t in ipairs(spots) do
-         local d = math.abs(t.b - prev.b)
-         if d < best then best, g.sel_spot = d, i end
-      end
-   end
-end
-
---- The human's shot as currently selected, or nil if passing / nothing fits.
-local function human_shot(g: Game): sim.Shot
-   if not g.human or g.passing or g.phase ~= "placing" then return nil end
-   local t = g.spots[g.sel_spot]
-   if not t then return nil end
-   return {
-      player = HUMAN,
-      wall = board.launch_walls(HUMAN, g.state.turn)[g.sel_wall],
-      slot = g.sel_slot,
-      cells = board.translate(g.state.players[HUMAN].bank[g.sel_slot], t),
+local function effect(g: Game, i: integer, text: string, hex: string, life: number)
+   local B = g.state.board
+   local p = board.centroid(B.a[i], B.b[i], view.side)
+   local r, gg, b = draw.rgb(hex)
+   g.effects[#g.effects + 1] = {
+      x = view.cx + p.x - 6, y = view.cy + p.y - 9, text = text,
+      r = r, g = gg, b = b, ttl = life, life = life,
    }
 end
 
---- Bot shots plus the human's, i.e. everything that fires on lock-in.
-local function all_shots(g: Game): {sim.Shot}
-   local out: {sim.Shot} = {}
-   for i, shot in ipairs(g.pending) do out[i] = shot end
-   local mine = human_shot(g)
-   if mine then out[#out + 1] = mine end
+--- Mark a player who just went out in the middle of their home.
+local function out_effect(g: Game, p: integer)
+   local home = g.state.board.homes[p]
+   effect(g, home[(#home + 1) // 2], "OUT", draw.DANGER, 2.5)
+end
+
+local function check_over(g: Game)
+   if sim.over(g.state) then g.over = true end
+end
+
+local function do_tick(g: Game)
+   local r = sim.tick(g.state)
+   for _, t in ipairs(r.cleared) do effect(g, t.i, "x", bc.FILL[t.color], 0.7) end
+   for _, t in ipairs(r.hits) do effect(g, t.i, "!", draw.DANGER, 1.2) end
+   for _, p in ipairs(r.out) do out_effect(g, p) end
+   check_over(g)
+   if not g.over then
+      for _, seat in ipairs(g.seats) do controls.update(g.state, seat) end
+   end
+end
+
+--- Player `p`'s shot clock ran out: fire their seat's aim.
+local function lock_in(g: Game, p: integer)
+   local s = g.state
+   local seat = g.seats[p]
+   local r = sim.lock_in(s, p, controls.shot(s, seat))
+   for _, t in ipairs(r.cleared) do effect(g, t.i, "x", bc.FILL[t.color], 0.7) end
+   if r.out then out_effect(g, p) end
+   check_over(g)
+   if g.over then return end
+   controls.fired(s, seat, r)
+   for _, other in ipairs(g.seats) do controls.update(s, other) end
+end
+
+--- Run the shot clocks down by `dt`, firing each one that runs out in turn.
+local function run_clocks(g: Game, dt: number)
+   for _, p in ipairs(sim.run_down(g.state, g.clocks, dt, shot_seconds)) do
+      if g.over then return end
+      lock_in(g, p)
+   end
+end
+
+--- The live player whose shot clock runs out next.
+local function soonest(g: Game): integer
+   local best: integer
+   for p, pl in ipairs(g.state.players) do
+      if pl.alive and (not best or g.clocks[p] < g.clocks[best]) then best = p end
+   end
+   return best
+end
+
+--- Fire now: skip the clocks ahead to when player `p`'s runs out (if `p`
+--- is nil or out, the next one to), so any that would run out first fire first.
+local function skip_ahead(g: Game, p?: integer)
+   if not (p and g.state.players[p].alive) then p = soonest(g) end
+   if p then run_clocks(g, g.clocks[p]) end
+end
+
+--- Who plays each player, as `seats` (or, for a first match, the keyboard
+--- on Player 1 unless it's all bots) left them.
+local function seat_all(state: sim.State, seats?: {controls.Seat}): {controls.Seat}
+   local out: {controls.Seat} = {}
+   for p = 1, #state.players do
+      local was = seats and seats[p]
+      if was and controls.is_human(was) then
+         out[p] = controls.human(state, p, was.kind, was.pad)
+      elseif not seats and keyboard and p == 1 then
+         out[p] = controls.human(state, p, "keys")
+      else
+         out[p] = controls.bot(state, p)
+      end
+   end
    return out
 end
 
---- Start the human's turn on the first chunk/wall that fits, own wall first.
-local function begin_human(g: Game)
-   g.passing = false
-   g.spots = nil
-   for _, w in ipairs({ g.sel_wall or 1, 3 - (g.sel_wall or 1) }) do
-      for slot = 1, sim.BANK do
-         g.sel_slot, g.sel_wall = slot, w
-         refresh_spots(g)
-         if #g.spots > 0 then return end
-      end
-   end
-end
-
---- Start a placement phase. If nobody can place anything and the last slide
---- moved nothing either, the board is jammed for good: call it a stalemate.
-local function begin_placing(g: Game)
-   g.pending = bots.plan(g.state, g.human and { [HUMAN] = true } or nil)
-   g.phase = "placing"
-   if g.human then begin_human(g) end
-   if #all_shots(g) == 0 and g.phase_moves == 0 and #g.state.chunks > 0 then
-      g.phase = "over"
-      g.stalemate = true
-      return
-   end
-   g.timer = place_seconds
-end
-
-local function new_game(seed: integer): Game
+local function new_game(seed: integer, seats?: {controls.Seat}): Game
+   local B = board.new(board_n, board_r)
+   view = draw.layout(B, 24, 92, 1440 - 24 - 470, 900 - 92 - 112)
    local g: Game = {
-      state = sim.new(N, SIZE, bc.seeded_random(seed)),
-      phase = "placing",
-      timer = 0,
-      pending = {},
+      state = sim.new(B, chunk_size, bc.seeded_random(seed)),
+      over = false,
+      clocks = sim.clocks(shot_seconds),
       tick_timer = 0,
       step_seconds = STEP_SECONDS,
       seed = seed,
-      winner = nil,
       effects = {},
-      phase_moves = -1,
-      stalemate = false,
-      human = human_mode,
    }
-   begin_placing(g)
+   g.seats = seat_all(g.state, seats)
    return g
 end
 
@@ -163,48 +161,6 @@ local function flag(args: {string}, name: string): string
    return nil
 end
 
---- Apply one simulation tick and spawn effects for what happened.
-local function do_tick(g: Game)
-   local r = sim.tick(g.state)
-   g.phase_moves = g.phase_moves + r.moved
-   for _, hit in ipairs(r.hits) do
-      local p = board.centroid(hit.cell.a, hit.cell.b, view.side)
-      local pl = board.PLAYERS[hit.owner]
-      local rr, gg, bb = draw.rgb(hit.victim and pl.color or draw.MUTED)
-      g.effects[#g.effects + 1] = {
-         x = view.cx + p.x - 6, y = view.cy + p.y - 8,
-         text = hit.victim and "-1" or "~",
-         r = rr, g = gg, b = bb, ttl = 0.9, life = 0.9,
-      }
-   end
-   for _, c in ipairs(r.cleared) do
-      local p = board.centroid(c.a, c.b, view.side)
-      local rr, gg, bb = draw.rgb(bc.FILL[c.color])
-      g.effects[#g.effects + 1] = {
-         x = view.cx + p.x - 4, y = view.cy + p.y - 8,
-         text = "x", r = rr, g = gg, b = bb, ttl = 0.7, life = 0.7,
-      }
-   end
-   if r.moved == 0 then
-      g.winner = sim.winner(g.state)
-      if g.winner then
-         g.phase = "over"
-      else
-         sim.end_turn(g.state)
-         begin_placing(g)
-      end
-   end
-end
-
-local function lock_in(g: Game)
-   sim.fire(g.state, all_shots(g))
-   g.pending = {}
-   g.phase = "sliding"
-   g.tick_timer = 0
-   g.phase_moves = 0
-   do_tick(g)
-end
-
 function love.load(args: {string})
    draw.background()
    fonts = {
@@ -213,11 +169,13 @@ function love.load(args: {string})
       big = love.graphics.newFont(20),
       title = love.graphics.newFont(26),
    }
+   board_n, board_r = board.options(args)
+   chunk_size = math.floor(tonumber(flag(args, "--size") or "") or chunk_size)
    local seed = tonumber(flag(args, "--seed") or "") or os.time()
-   if flag(args, "--fast") then place_seconds = 1.0 end
-   if flag(args, "--bots") then human_mode = false end
-   local shot = flag(args, "--shot")
+   if flag(args, "--fast") then shot_seconds = 2.0 end
+   if flag(args, "--bots") then keyboard = false end
    game = new_game(math.floor(seed))
+   local shot = flag(args, "--shot")
    if shot then
       game.shot_path = shot
       game.shot_after = tonumber(flag(args, "--after") or "") or 3.0
@@ -231,12 +189,10 @@ function love.update(dt: number)
       if g.effects[i].life <= 0 then table.remove(g.effects, i) end
    end
 
-   if g.phase == "placing" then
-      g.timer = g.timer - dt
-      if g.timer <= 0 then lock_in(g) end
-   elseif g.phase == "sliding" then
+   if not g.over then
+      run_clocks(g, dt)
       g.tick_timer = g.tick_timer + dt
-      while g.phase == "sliding" and g.tick_timer >= g.step_seconds do
+      while not g.over and g.tick_timer >= g.step_seconds do
          g.tick_timer = g.tick_timer - g.step_seconds
          do_tick(g)
       end
@@ -252,158 +208,224 @@ function love.update(dt: number)
    end
 end
 
-local function turn_label(turn: board.Turn): string
-   return turn == "A" and "Turn A - clockwise" or "Turn B - counterclockwise"
+--- The seat played on `kind` of controller (and `pad`, for a gamepad), if any.
+local function seat_of(g: Game, kind: controls.Kind, pad?: love.Joystick): controls.Seat
+   for _, seat in ipairs(g.seats) do
+      if seat.kind == kind and seat.pad == pad then return seat end
+   end
+   return nil
 end
 
---- Every key the game listens to, grouped for the on-screen legend.
-local function controls(g: Game): {draw.KeyGroup}
-   local groups: {draw.KeyGroup} = {}
-   if g.human then
-      groups[#groups + 1] = {
-         title = "You (" .. board.PLAYERS[HUMAN].name .. ")",
-         keys = {
-            { "1 2 3", "pick chunk" },
-            { "W / Tab", "own / loaned wall" },
-            { "Left Right / A D", "slide along wall" },
-            { "X", g.passing and "unpass" or "pass" },
-            { "Space / Enter", "fire now" },
-         },
-      }
-   else
-      groups[#groups + 1] = { title = "Bots", keys = { { "Space", "skip countdown" } } }
+--- The first bot seat a newcomer could take: one still in, or any once
+--- the match is over.
+local function free_seat(g: Game): controls.Seat
+   for p, seat in ipairs(g.seats) do
+      if seat.kind == "bot" and (g.over or g.state.players[p].alive) then return seat end
    end
-   groups[#groups + 1] = {
-      title = "Game",
-      keys = {
-         { "+ / -", "slide speed" },
-         { "R", "new match" },
-         { "Esc", "quit" },
-      },
-   }
+   return nil
+end
+
+--- Gamepads plugged in but not playing.
+local function idle_pads(): integer
+   local n = 0
+   for _, pad in ipairs(love.joystick.getJoysticks()) do
+      if pad:isGamepad() and not seat_of(game, "pad", pad) then n = n + 1 end
+   end
+   return n
+end
+
+--- Every key and button the game listens to, grouped for the on-screen legend:
+--- one group per kind of controller in play, then how to join, then the
+--- game's own keys.
+local function legend(g: Game): {draw.KeyGroup}
+   local groups: {draw.KeyGroup} = {}
+   for _, kind in ipairs({ "keys", "pad" } as {controls.Kind}) do
+      local who: {integer} = {}
+      local label: string
+      for p, seat in ipairs(g.seats) do
+         if seat.kind == kind then who[#who + 1], label = p, controls.label(seat) end
+      end
+      if #who > 0 then
+         local names = #who == 1 and board.PLAYERS[who[1]].name or "Players " .. table.concat(who, ", ")
+         groups[#groups + 1] = {
+            title = ("%s  -  %s"):format(names, label),
+            color = #who == 1 and board.PLAYERS[who[1]].color or nil,
+            keys = controls.legend(kind),
+         }
+      end
+   end
+   local free = free_seat(g)
+   if free then
+      local who = board.PLAYERS[free.player].name
+      local hint = idle_pads() > 0 and ("join as " .. who) or ("plug one in and press Start to join as " .. who)
+      groups[#groups + 1] = { title = "Controller", keys = { { "Start", hint } } }
+   end
+   local game_keys: {{string, string}} = { { "+ / -", "slide speed" }, { "R", "new match" }, { "Esc", "quit" } }
+   if not seat_of(g, "keys") then table.insert(game_keys, 1, { "Space", "skip to the next shot" }) end
+   groups[#groups + 1] = { title = "Game", keys = game_keys }
    return groups
 end
 
 function love.draw()
    local g = game
    local s = g.state
+   local B = s.board
 
-   draw.grid(view)
+   draw.board(view)
 
-   -- Chunks on the board, sliding ones interpolated back toward where they were.
-   local progress = g.phase == "sliding" and math.min(1, g.tick_timer / g.step_seconds) or 1
+   -- Chunks, the ones that moved last tick drawn back toward where they were.
+   local progress = g.over and 1 or math.min(1, g.tick_timer / g.step_seconds)
    for _, chunk in ipairs(s.chunks) do
       local ox, oy = 0.0, 0.0
       if chunk.moved and progress < 1 then
-         local o = bc.centroid(0, 0, view.side)
-         local p = bc.centroid(chunk.step.a, chunk.step.b, view.side)
-         ox, oy = -(p.x - o.x) * (1 - progress), -(p.y - o.y) * (1 - progress)
+         local sx, sy = draw.step_offset(view, chunk.heading)
+         ox, oy = -sx * (1 - progress), -sy * (1 - progress)
       end
       draw.chunk(view, chunk.cells, ox, oy, 1, board.PLAYERS[chunk.owner].color)
    end
 
-   -- Pending shots as ghosts with their headings; the human's stands out.
-   local shots = all_shots(g)
-   if g.phase == "placing" then
-      for _, shot in ipairs(shots) do
-         local owner = board.PLAYERS[shot.player].color
-         local mine = g.human and shot.player == HUMAN
-         draw.chunk(view, shot.cells, 0, 0, mine and 0.75 or 0.45, owner)
-         draw.arrow(view, shot.cells, board.fire_dir(shot.player, s.turn), owner, mine and 1 or 0.8)
+   -- Aims: the bots' faintly, the humans' with their headings and ghosts.
+   local aims: {integer: draw.Aim} = {}
+   if not g.over then
+      for p, seat in ipairs(g.seats) do
+         local shot = seat.plan
+         local aim = seat.aim
+         if shot and s.players[p].alive then
+            local hex = board.PLAYERS[shot.player].color
+            draw.chunk(view, shot.cells, 0, 0, 0.35, hex)
+            draw.arrow(view, shot.cells, shot.heading, hex, 0.5)
+            aims[shot.player] = {
+               slot = shot.slot, heading = shot.heading,
+               look = sim.legal(s, shot.player, shot.cells)
+                  and sim.ghost(s, shot.player, shot.cells, shot.heading).look or nil,
+            }
+         end
+         if aim and s.players[p].alive then
+            local hex = board.PLAYERS[p].color
+            local h = controls.heading(seat)
+            if aim.pick then
+               draw.ghost(view, aim.ghost)
+               draw.chunk(view, aim.cells, 0, 0, 0.85, hex)
+               if aim.ghost.look == "friendly" then draw.grey(view, aim.cells) end
+               draw.arrow(view, aim.cells, h, aim.ghost.look == "clear" and hex or draw.look_color(aim.ghost.look), 1)
+               aims[p] = { slot = aim.slot, heading = h, look = aim.ghost.look }
+            else
+               if aim.cells then draw.misfit(view, aim.cells) end
+               aims[p] = { slot = aim.slot, heading = h }
+            end
+         end
       end
    end
 
-   draw.walls(view, s.turn)
    draw.effects(g.effects, fonts.big)
 
    -- Header.
    love.graphics.setFont(fonts.title)
    local rr, gg, bb = draw.rgb(draw.INK)
    love.graphics.setColor(rr, gg, bb)
-   love.graphics.print(("Round %d  -  %s"):format(s.round, turn_label(s.turn)), 24, 18)
-
+   local alive = sim.alive(s)
+   local title = "Match over"
+   local humans: {integer} = {}
+   for p, seat in ipairs(g.seats) do
+      if controls.is_human(seat) and s.players[p].alive then humans[#humans + 1] = p end
+   end
+   if not g.over and #humans == 1 then
+      title = ("Your shot clock %.1f s"):format(math.max(0, g.clocks[humans[1]]))
+   elseif not g.over then
+      local p = soonest(g)
+      title = ("%s shoots in %.1f s"):format(board.PLAYERS[p].name, math.max(0, g.clocks[p]))
+   end
+   love.graphics.print(title, 24, 18)
    love.graphics.setFont(fonts.body)
    rr, gg, bb = draw.rgb(draw.MUTED)
    love.graphics.setColor(rr, gg, bb)
-   local status: string
-   if g.phase == "placing" then
-      status = ("placing - firing in %.1fs   (space to fire now)"):format(math.max(0, g.timer))
-   elseif g.phase == "sliding" then
-      status = ("sliding - %d chunk%s on the board"):format(#s.chunks, #s.chunks == 1 and "" or "s")
-   elseif g.stalemate then
-      status = "stalemate - the board is jammed and nothing fits against any wall"
-   else
-      status = "game over"
-   end
-   love.graphics.print(status, 24, 52)
+   love.graphics.print(("%d chunk%s on the board  -  %d player%s in  -  %d-%d board"):format(
+      #s.chunks, #s.chunks == 1 and "" or "s", alive, alive == 1 and "" or "s", 2 * B.n, B.r), 24, 54)
 
-   draw.controls(controls(g), 24, 704, 780, fonts.small)
-   rr, gg, bb = draw.rgb(draw.MUTED)
+   draw.controls(legend(g), 24, 900 - 12, 940, fonts.small)
    love.graphics.setColor(rr, gg, bb)
    love.graphics.setFont(fonts.small)
-   love.graphics.print(("seed %d   step %.2fs"):format(g.seed, g.step_seconds), 1060, 770)
+   love.graphics.print(("seed %d   step %.2fs"):format(g.seed, g.step_seconds), 1440 - 180, 900 - 24)
 
-   draw.panels(s, shots, g.phase == "placing", 830, 100, 420, fonts.small, fonts.big,
-      g.human and HUMAN or nil)
+   local tags: {draw.Seat} = {}
+   for p, seat in ipairs(g.seats) do
+      tags[p] = { label = controls.label(seat), slots = controls.slot_keys(seat.kind) }
+   end
+   draw.panels(s, aims, g.clocks, tags, 1440 - 446, 92, 422, fonts.small, fonts.big)
 
-   if g.phase == "over" then
+   if g.over then
       love.graphics.setColor(1, 1, 1, 0.75)
       love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
       love.graphics.setFont(fonts.title)
-      if g.winner then
-         local pl = board.PLAYERS[g.winner]
-         rr, gg, bb = draw.rgb(pl.color)
+      local winner = sim.winner(s)
+      if winner then
+         rr, gg, bb = draw.rgb(board.PLAYERS[winner].color)
          love.graphics.setColor(rr, gg, bb)
-         love.graphics.printf(pl.name .. " wins", 0, 360, love.graphics.getWidth(), "center")
+         love.graphics.printf(board.PLAYERS[winner].name .. " wins", 0, 400, love.graphics.getWidth(), "center")
       else
          rr, gg, bb = draw.rgb(draw.INK)
          love.graphics.setColor(rr, gg, bb)
-         love.graphics.printf("Stalemate", 0, 360, love.graphics.getWidth(), "center")
+         love.graphics.printf("Draw", 0, 400, love.graphics.getWidth(), "center")
       end
       rr, gg, bb = draw.rgb(draw.MUTED)
       love.graphics.setColor(rr, gg, bb)
       love.graphics.setFont(fonts.body)
-      love.graphics.printf("press R for a new match", 0, 400, love.graphics.getWidth(), "center")
+      love.graphics.printf("press R for a new match", 0, 440, love.graphics.getWidth(), "center")
    end
 end
 
---- Placement keys for the human. Returns true if the key was handled.
-local function human_key(g: Game, key: string): boolean
-   if not g.human or g.phase ~= "placing" then return false end
-   local slot = tonumber(key) or tonumber(key:match("^kp(%d)$") or "")
-   if slot and slot >= 1 and slot <= sim.BANK then
-      g.sel_slot, g.passing = math.floor(slot), false
-      refresh_spots(g)
-   elseif key == "w" or key == "tab" then
-      g.sel_wall, g.passing = 3 - g.sel_wall, false
-      g.spots = nil
-      refresh_spots(g)
-   elseif key == "left" or key == "a" then
-      g.sel_spot, g.passing = math.max(1, g.sel_spot - 1), false
-   elseif key == "right" or key == "d" then
-      g.sel_spot, g.passing = math.min(math.max(1, #g.spots), g.sel_spot + 1), false
-   elseif key == "x" then
-      g.passing = not g.passing
-   elseif key == "return" or key == "kpenter" then
-      lock_in(g)
+--- `action` from `seat`'s controller: aim, or fire now.
+local function seat_action(g: Game, seat: controls.Seat, action: controls.Action)
+   if g.over then return end
+   if action == "fire" then
+      skip_ahead(g, seat.player)
    else
-      return false
+      controls.act(g.state, seat, action)
    end
-   return true
 end
 
 function love.keypressed(key: string)
    local g = game
-   if human_key(g, key) then return end
-   if key == "escape" then
+   local seat = seat_of(g, "keys")
+   local action = controls.key_action(key)
+   if seat and action then
+      seat_action(g, seat, action)
+   elseif key == "escape" then
       love.event.quit()
-   elseif key == "space" and g.phase == "placing" then
-      lock_in(g)
+   elseif (key == "space" or key == "return") and not g.over then
+      skip_ahead(g)
    elseif key == "r" then
-      game = new_game(g.seed + 1)
+      game = new_game(g.seed + 1, g.seats)
    elseif key == "=" or key == "+" or key == "kp+" then
       g.step_seconds = math.max(0.04, g.step_seconds / 1.5)
    elseif key == "-" or key == "kp-" then
       g.step_seconds = math.min(2, g.step_seconds * 1.5)
    end
+end
+
+function love.gamepadpressed(pad: love.Joystick, button: string)
+   local g = game
+   local seat = seat_of(g, "pad", pad)
+   local action = controls.button_action(button)
+   if not seat then
+      local free = action == "join" and free_seat(g)
+      if free then g.seats[free.player] = controls.human(g.state, free.player, "pad", pad) end
+   elseif action == "leave" then
+      g.seats[seat.player] = controls.bot(g.state, seat.player)
+   elseif action then
+      seat_action(g, seat, action)
+   end
+end
+
+function love.gamepadaxis(pad: love.Joystick, axis: string, value: number)
+   local seat = seat_of(game, "pad", pad)
+   if not seat then return end
+   local action = controls.axis_action(seat, axis, value)
+   if action then seat_action(game, seat, action) end
+end
+
+--- An unplugged gamepad's player goes back to a bot.
+function love.joystickremoved(pad: love.Joystick)
+   local seat = seat_of(game, "pad", pad)
+   if seat then game.seats[seat.player] = controls.bot(game.state, seat.player) end
 end

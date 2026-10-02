@@ -8,6 +8,17 @@ global record love
       getWidth: function(Font, string): number
    end
 
+   record Joystick
+      userdata
+      getID: function(Joystick): integer
+      getName: function(Joystick): string
+      isGamepad: function(Joystick): boolean
+   end
+
+   record joystick
+      getJoysticks: function(): {Joystick}
+   end
+
    record graphics
       setBackgroundColor: function(number, number, number, ?number)
       setColor: function(number, number, number, ?number)
@@ -53,4 +64,8 @@ global record love
    update: function(number)
    draw: function()
    keypressed: function(string)
+   gamepadpressed: function(Joystick, string)
+   gamepadaxis: function(Joystick, string, number)
+   joystickadded: function(Joystick)
+   joystickremoved: function(Joystick)
 end

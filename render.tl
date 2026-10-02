@@ -1,355 +1,379 @@
---- Draws the blunkychunks board to SVG.
+--- Draws the README's figures of the notched board to SVG.
 ---
----   tl run render.tl                          # images/{board,turn-a,turn-b}.svg
+---   tl run render.tl                                   # images/board.svg, images/shots.svg
+---   tl run render.tl -- --diameter 12 --notch 5         # another board
+---   tl run render.tl -- --side 30 --seed 3              # bigger triangles, other chunks
+---   tl run render.tl -- --cells                         # label every cell (x, y)
+---   tl run render.tl -- --out /tmp/out                  # somewhere other than images/
 ---
---- `tl run` parses flags itself, so anything meant for this script goes after a
---- `--` separator:
----
----   tl run render.tl -- --n 6 --side 40       # a smaller board
----   tl run render.tl -- --seed 42             # a different pair of turns
----   tl run render.tl -- --out /tmp/out         # somewhere other than images/
----
---- Compiled, there is nothing to separate:
----
----   tl gen --gen-target=5.1 *.tl && lua render.lua --n 6 --side 40
----
---- Turn A sweeps clockwise and turn B counterclockwise; see board.tl for what
---- that means for who may fire from where.
+--- board.svg is the empty board: the homes, their back walls and the dashed
+--- lines. shots.svg is one aim per player with its heading and its ghost, one
+--- of each look: Player 3 lands clear, a pile keeps Player 1's shot in their
+--- own home, and Player 2 aims a heading that can't get out of their home.
 
 local bc = require("blunkychunks")
 local board = require("board")
+local sim = require("sim")
 
 local type XY = bc.XY
-local type Cell = bc.Cell
-local type Turn = board.Turn
+local type Tri = board.Tri
+local type Board = board.Board
 
-local SQRT3 <const> = math.sqrt(3)
-
-local GRID <const> = "#9aa5b1"
-local WALL <const> = "#1f2933"
 local INK <const> = "#1f2933"
-local AXIS <const> = "#7b8794"
+local GRID <const> = "#c5ccd3"
+local DASH <const> = "#52606d"
+local MUTED <const> = "#7b8794"
 local PAPER <const> = "#ffffff"
-
-local LABEL_OFF <const> = 26.0
-local AXIS_GAP <const> = 7.0
-local AXIS_NAME_OFF <const> = 36.0
-local PAD_X <const> = 26.0
-local PAD_Y <const> = 54.0 -- room for the labels above and below the board
-local TITLE_H <const> = 46.0 -- extra room above the board for a title and note
-local EPS <const> = 1e-6
+local AMBER <const> = "#d99a00"
+local DANGER <const> = "#c0392b"
+local STONE <const> = { "#b9ad9b", "#a99d8b", "#c4b9a8", "#9f9381", "#b2a593" }
+local TINT <const> = { "#f9e4e5", "#e2e8f6", "#e2f0e5" }
+local PAD <const> = 30.0
+local TITLE_H <const> = 56.0
 
 local function f(v: number): string
    return ("%.2f"):format(v)
 end
 
---- An SVG document being assembled line by line.
+--- An SVG being assembled line by line, with board space mapped onto it.
 local record Canvas
    parts: {string}
    ox: number
    oy: number
+   side: number
+   board: Board
+   w: number
+   h: number
 end
 
---- `oy` is where the board's centre line sits, so the top can be padded more
---- than the bottom when there is a title to make room for.
-local function canvas(width: number, height: number, oy: number): Canvas
-   return {
-      parts = {
-         ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %s %s" width="%d" height="%d">')
-            :format(f(width), f(height), math.floor(width + 0.5), math.floor(height + 0.5)),
-         ('  <rect width="100%%" height="100%%" fill="%s"/>'):format(PAPER),
-      },
-      ox = width / 2,
-      oy = oy,
-   }
+local function emit(c: Canvas, s: string)
+   c.parts[#c.parts + 1] = s
 end
 
-local function emit(c: Canvas, line: string)
-   c.parts[#c.parts + 1] = line
-end
-
-local function finish(c: Canvas): string
-   emit(c, "</svg>")
-   return table.concat(c.parts, "\n") .. "\n"
-end
-
---- Board space -> document space.
-local function at(c: Canvas, p: XY): XY
-   return { x = p.x + c.ox, y = p.y + c.oy }
-end
-
-local function line(c: Canvas, p: XY, q: XY, attrs: string)
-   local a, b = at(c, p), at(c, q)
-   emit(c, ('    <line x1="%s" y1="%s" x2="%s" y2="%s" %s/>')
-      :format(f(a.x), f(a.y), f(b.x), f(b.y), attrs))
-end
-
-local function polygon(c: Canvas, pts: {XY}, attrs: string)
+local function poly(c: Canvas, i: integer, attrs: string)
    local out: {string} = {}
-   for i, p in ipairs(pts) do
-      local q = at(c, p)
-      out[i] = f(q.x) .. "," .. f(q.y)
+   for k, p in ipairs(board.corners(c.board.a[i], c.board.b[i], c.side)) do
+      out[k] = f(p.x + c.ox) .. "," .. f(p.y + c.oy)
    end
    emit(c, ('    <polygon points="%s" %s/>'):format(table.concat(out, " "), attrs))
 end
 
-local function text(c: Canvas, p: XY, body: string, attrs: string, angle: number)
-   local q = at(c, p)
-   local rot = angle ~= 0
-      and (' transform="rotate(%s %s %s)"'):format(f(angle), f(q.x), f(q.y))
-      or ""
-   emit(c, ('    <text x="%s" y="%s"%s %s>%s</text>'):format(f(q.x), f(q.y), rot, attrs, body))
+local function seg(c: Canvas, s: board.Seg)
+   emit(c, ('    <line x1="%s" y1="%s" x2="%s" y2="%s"/>')
+      :format(f(s.x1 + c.ox), f(s.y1 + c.oy), f(s.x2 + c.ox), f(s.y2 + c.oy)))
 end
 
-local function add(p: XY, d: XY, t: number): XY
-   return { x = p.x + d.x * t, y = p.y + d.y * t }
+local function text(c: Canvas, p: XY, body: string, attrs: string)
+   emit(c, ('  <text x="%s" y="%s" font-family="Helvetica, Arial, sans-serif" %s>%s</text>')
+      :format(f(p.x + c.ox), f(p.y + c.oy), attrs, body))
 end
 
-local function dot(p: XY, q: XY): number
-   return p.x * q.x + p.y * q.y
+--- A canvas fitted round the board and its drawn walls, with room for a title.
+local function canvas(B: Board, side: number): Canvas
+   local g = board.geometry(B, side)
+   local xmin, xmax, ymin, ymax = math.huge, -math.huge, math.huge, -math.huge
+   local all: {integer} = {}
+   for _, i in ipairs(B.cells) do all[#all + 1] = i end
+   for _, i in ipairs(g.walls) do all[#all + 1] = i end
+   for _, i in ipairs(all) do
+      for _, p in ipairs(board.corners(B.a[i], B.b[i], side)) do
+         xmin, xmax = math.min(xmin, p.x), math.max(xmax, p.x)
+         ymin, ymax = math.min(ymin, p.y), math.max(ymax, p.y)
+      end
+   end
+   local w, h = xmax - xmin + 2 * PAD, ymax - ymin + 2 * PAD + TITLE_H
+   local c: Canvas = {
+      parts = {
+         ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %s %s" width="%d" height="%d">')
+            :format(f(w), f(h), math.floor(w + 0.5), math.floor(h + 0.5)),
+         ('  <rect width="100%%" height="100%%" fill="%s"/>'):format(PAPER),
+      },
+      ox = PAD - xmin, oy = PAD + TITLE_H - ymin, side = side, board = B, w = w, h = h,
+   }
+   return c
 end
 
---- The grid of triangles, drawn once.
-local function draw_grid(c: Canvas, n: integer, side: number)
-   emit(c, ('  <g stroke="%s" stroke-width="0.8" stroke-linecap="round" fill="none">'):format(GRID))
-   for _, s in ipairs(board.grid_segments(n, side)) do
-      line(c, { x = s.x1, y = s.y1 }, { x = s.x2, y = s.y2 }, "")
+local function title(c: Canvas, body: string, note: string)
+   local attrs = 'text-anchor="middle" dominant-baseline="middle"'
+   emit(c, ('  <text x="%s" y="%s" fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="600" %s>%s</text>')
+      :format(f(c.w / 2), f(PAD + 4), INK, attrs, body))
+   emit(c, ('  <text x="%s" y="%s" fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="12" %s>%s</text>')
+      :format(f(c.w / 2), f(PAD + 26), MUTED, attrs, note))
+end
+
+--- Stone walls, tinted homes, the grid, dashed lines and back walls.
+local function draw_board(c: Canvas)
+   local B = c.board
+   local g = board.geometry(B, c.side)
+   emit(c, '  <g stroke="none">')
+   for _, i in ipairs(g.walls) do
+      local a, b = B.a[i], B.b[i]
+      poly(c, i, ('fill="%s"'):format(STONE[(a * a * 7 + b * b * 13 + a * b * 5 + a * 3 + b) % #STONE + 1]))
+   end
+   for _, i in ipairs(B.cells) do
+      local k = B.kind[i]
+      poly(c, i, ('fill="%s"'):format(k > 0 and TINT[k] or PAPER))
+   end
+   emit(c, "  </g>")
+   emit(c, ('  <g stroke="%s" stroke-width="0.8" stroke-linecap="round">'):format(GRID))
+   for _, s in ipairs(g.grid) do seg(c, s) end
+   emit(c, "  </g>")
+   emit(c, ('  <g stroke="%s" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round">'):format(DASH))
+   for j = 0, 5 do seg(c, board.wall(B.n, c.side, j)) end
+   emit(c, "  </g>")
+   emit(c, ('  <g stroke="%s" stroke-width="3.5" stroke-linecap="round">'):format(INK))
+   for _, s in ipairs(g.outline) do seg(c, s) end
+   emit(c, "  </g>")
+end
+
+--- Each player's name in the corner diamond of their home, halfway out from
+--- the central hexagon's corner to the board's.
+local function draw_names(c: Canvas)
+   local B = c.board
+   for p, pl in ipairs(board.PLAYERS) do
+      local t = pl.corner * math.pi / 3
+      local rad = (B.n + B.r / 2) * c.side
+      local x, y = rad * math.cos(t), rad * math.sin(t)
+      local where = ({ "southwest", "northwest", "east" })[p]
+      text(c, { x = x, y = y - 4 }, pl.name,
+         ('fill="%s" font-size="18" font-weight="600" text-anchor="middle"'):format(pl.color))
+      text(c, { x = x, y = y + 15 }, where, ('fill="%s" font-size="12" text-anchor="middle"'):format(MUTED))
+   end
+end
+
+--- Every cell's (x, y), small, at its centroid.
+local function draw_labels(c: Canvas)
+   local B = c.board
+   emit(c, ('  <g fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="%s" text-anchor="middle" dominant-baseline="central">')
+      :format(MUTED, f(c.side * 0.2)))
+   for i = 1, B.size do
+      if B.kind[i] ~= board.WALL then
+         local p = board.centroid(B.a[i], B.b[i], c.side)
+         local x, y = board.xy(B, i)
+         local nudge = c.side * 0.05 * (bc.is_up(B.a[i], B.b[i]) and 1 or -1)
+         emit(c, ('    <text x="%s" y="%s">%d,%d</text>'):format(f(p.x + c.ox), f(p.y + c.oy + nudge), x, y))
+      end
    end
    emit(c, "  </g>")
 end
 
---- The six walls, with the three defended ones in their player's color, plus a
---- label sitting just outside each of those.
----
---- Given a turn, the neutral wall each player may *also* fire from that turn is
---- drawn dashed in their color, so the two walls open to them read as a pair.
---- Every wall is spoken for on any given turn: three owned, three on loan.
-local function draw_walls(c: Canvas, n: integer, side: number, turn: Turn)
-   local own: {integer: string} = {}
-   local lent: {integer: string} = {}
-   for i, p in ipairs(board.PLAYERS) do
-      own[p.wall] = p.color
-      if turn then
-         lent[board.launch_walls(i, turn)[2]] = p.color
+--- The outline of `cells`: every edge they don't share with each other.
+local function silhouette(c: Canvas, cells: {integer}, attrs: string)
+   local B = c.board
+   local inside: {integer: boolean} = {}
+   for _, i in ipairs(cells) do inside[i] = true end
+   emit(c, ('  <g %s fill="none" stroke-linecap="round">'):format(attrs))
+   for _, i in ipairs(cells) do
+      for _, d in ipairs(B.near[board.facing(i)]) do
+         if not inside[i + d] then
+            local pts: {XY} = {}
+            for _, v in ipairs(board.vertices(B.a[i], B.b[i])) do
+               for _, u in ipairs(board.vertices(B.a[i + d], B.b[i + d])) do
+                  if u.a == v.a and u.b == v.b then pts[#pts + 1] = board.point(v.a, v.b, c.side) end
+               end
+            end
+            seg(c, { x1 = pts[1].x, y1 = pts[1].y, x2 = pts[2].x, y2 = pts[2].y })
+         end
       end
-   end
-
-   emit(c, '  <g stroke-width="4" stroke-linecap="round" fill="none">')
-   for j = 0, 5 do
-      local w = board.wall(n, side, j)
-      local attrs: string
-      if own[j] then
-         attrs = ('stroke="%s"'):format(own[j])
-      elseif lent[j] then
-         attrs = ('stroke="%s" stroke-dasharray="12 9"'):format(lent[j])
-      else
-         attrs = ('stroke="%s"'):format(WALL)
-      end
-      line(c, { x = w.x1, y = w.y1 }, { x = w.x2, y = w.y2 }, attrs)
-   end
-   emit(c, "  </g>")
-
-   emit(c, '  <g font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="600"'
-      .. ' text-anchor="middle" dominant-baseline="middle">')
-   for _, p in ipairs(board.PLAYERS) do
-      local w = board.wall(n, side, p.wall)
-      local mid: XY = { x = (w.x1 + w.x2) / 2, y = (w.y1 + w.y2) / 2 }
-      local out = board.wall_normal(p.wall)
-      -- Run the label along its wall, flipped when it would read upside down.
-      -- Wall j joins corners at 60j and 60(j+1) degrees, so the chord it spans
-      -- points at 60j + 120 -- no need for math.atan, which is 5.3+ with two
-      -- arguments and so would break under LuaJIT.
-      local angle = (60 * p.wall + 120) % 360
-      while angle > 90 do angle = angle - 180 end
-      text(c, add(mid, out, LABEL_OFF), p.name, ('fill="%s"'):format(p.color), angle)
    end
    emit(c, "  </g>")
 end
 
---- One family of parallel cell lines, labelled along the wall it runs into.
-local record Axis
-   wall: integer
-   name: string
-   value: function(integer, integer): integer
+local function indices(cells: {Tri}): {integer}
+   local out: {integer} = {}
+   for k, t in ipairs(cells) do out[k] = t.i end
+   return out
 end
 
---- A chunk can only travel along the three lattice directions, and every cell
---- lies on one line of each family. Each family is perpendicular to one pair
---- of opposite walls, and we label it along the neutral wall of that pair, so
---- the labels never crowd the players' names:
----
----   b      constant   vertical               top wall (4)
----   a      constant   rising to the right    lower-left wall (2)
----   a - b  constant   falling to the right   lower-right wall (0)
----
---- A line that leaves the board through a defended wall goes unlabelled, but
---- no cell is on two such lines: the corner region that misses one neutral
---- wall always reaches the other two, so every cell can be read off two axes.
-local AXES: {Axis} = {
-   { wall = 4, name = "b", value = function(_: integer, b: integer): integer return b end },
-   { wall = 2, name = "a", value = function(a: integer, _: integer): integer return a end },
-   { wall = 0, name = "a &#8722; b", value = function(a: integer, b: integer): integer return a - b end },
-}
+--- A chunk's triangles and its outline in its owner's colour.
+local function draw_chunk(c: Canvas, cells: {Tri}, owner: string, opacity: number)
+   emit(c, ('  <g stroke="%s" stroke-width="0.9" opacity="%s">'):format(PAPER, f(opacity)))
+   for _, t in ipairs(cells) do poly(c, t.i, ('fill="%s"'):format(bc.FILL[t.color])) end
+   emit(c, "  </g>")
+   silhouette(c, indices(cells), ('stroke="%s" stroke-width="2.6" opacity="%s"'):format(owner, f(opacity)))
+end
 
---- Coordinate labels just outside the three neutral walls, plus each axis's
---- name further out, opposite the wall's midpoint.
----
---- Neighbouring lines are half a side apart, too tight for upright numbers, so
---- each label runs along its own line: rotated to read the right way up, with
---- whichever end is nearer the wall anchored a small gap outside it.
-local function draw_axes(c: Canvas, n: integer, side: number)
-   local apothem = n * side * SQRT3 / 2
-   local half = n * side / 2 + EPS
+local function look_color(look: sim.Look): string
+   return look == "clear" and INK or look == "home" and AMBER or DANGER
+end
 
-   emit(c, ('  <g fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="9"'
-      .. ' dominant-baseline="middle">'):format(AXIS))
-   for _, axis in ipairs(AXES) do
-      local u = board.wall_normal(axis.wall) -- also the direction of the family
-      local along: XY = { x = -u.y, y = u.x }
+--- Every triangle of a ghost, landed or hit.
+local function ghost_cells(g: sim.Ghost): {integer}
+   local out = indices(g.cells)
+   for _, t in ipairs(g.hits) do out[#out + 1] = t.i end
+   return out
+end
 
-      -- Reading direction in (-180, 180], then folded into [-90, 90).
-      local angle = (30 + 60 * axis.wall + 180) % 360 - 180
-      local anchor = "start"
-      if angle >= 90 or angle < -90 then
-         angle = angle + (angle > 0 and -180 or 180)
-         anchor = "end"
-      end
+--- A ghost: its triangles in faded colours and an outline in its look's
+--- colour, with its hits in full colour and crossed out.
+local function draw_ghost(c: Canvas, g: sim.Ghost)
+   local B = c.board
+   emit(c, '  <g fill-opacity="0.3" stroke="none">')
+   for _, t in ipairs(g.cells) do poly(c, t.i, ('fill="%s"'):format(bc.FILL[t.color])) end
+   emit(c, "  </g>")
+   emit(c, ('  <g stroke="%s" stroke-width="0.9">'):format(PAPER))
+   for _, t in ipairs(g.hits) do poly(c, t.i, ('fill="%s"'):format(bc.FILL[t.color])) end
+   emit(c, "  </g>")
+   emit(c, ('  <g stroke="%s" stroke-width="2" stroke-linecap="round">'):format(PAPER))
+   local r = c.side * 0.16
+   for _, t in ipairs(g.hits) do
+      local p = board.centroid(B.a[t.i], B.b[t.i], c.side)
+      seg(c, { x1 = p.x - r, y1 = p.y - r, x2 = p.x + r, y2 = p.y + r })
+      seg(c, { x1 = p.x - r, y1 = p.y + r, x2 = p.x + r, y2 = p.y - r })
+   end
+   emit(c, "  </g>")
+   silhouette(c, ghost_cells(g), ('stroke="%s" stroke-width="2.6" stroke-dasharray="5 3"'):format(look_color(g.look)))
+end
 
-      local seen: {integer: boolean} = {}
-      for _, cell in ipairs(board.cells(n)) do
-         local v = axis.value(cell.a, cell.b)
-         if not seen[v] then
-            seen[v] = true
-            -- Every cell on the line shares this exit point, so one will do.
-            local p = board.centroid(cell.a, cell.b, side)
-            local exit = add(p, u, apothem - dot(p, u))
-            if math.abs(dot(exit, along)) <= half then
-               local body = v < 0 and ("&#8722;" .. -v) or tostring(v)
-               text(c, add(exit, u, AXIS_GAP), body, ('text-anchor="%s"'):format(anchor), angle)
+--- An arrow from just ahead of `cells` along `heading`.
+local function draw_arrow(c: Canvas, cells: {Tri}, heading: integer, hex: string)
+   local B = c.board
+   local st = board.STEPS[heading]
+   local o, q = bc.centroid(0, 0, 1), bc.centroid(st.a, st.b, 1)
+   local dx, dy = q.x - o.x, q.y - o.y
+   local cx, cy = 0.0, 0.0
+   for _, t in ipairs(cells) do
+      local p = board.centroid(B.a[t.i], B.b[t.i], c.side)
+      cx, cy = cx + p.x, cy + p.y
+   end
+   cx, cy = cx / #cells, cy / #cells
+   local lead = 0.0
+   for _, t in ipairs(cells) do
+      local p = board.centroid(B.a[t.i], B.b[t.i], c.side)
+      lead = math.max(lead, (p.x - cx) * dx + (p.y - cy) * dy)
+   end
+   lead = lead + c.side * 0.8
+   local s = c.side
+   local tail: XY = { x = cx + dx * lead, y = cy + dy * lead }
+   local head: XY = { x = cx + dx * (lead + 2.4 * s), y = cy + dy * (lead + 2.4 * s) }
+   local base: XY = { x = head.x - dx * 0.7 * s, y = head.y - dy * 0.7 * s }
+   emit(c, ('  <g stroke="%s" fill="%s">'):format(hex, hex))
+   emit(c, ('    <line x1="%s" y1="%s" x2="%s" y2="%s" stroke-width="3.4" stroke-linecap="round"/>')
+      :format(f(tail.x + c.ox), f(tail.y + c.oy), f(head.x + c.ox), f(head.y + c.oy)))
+   emit(c, ('    <polygon points="%s,%s %s,%s %s,%s" stroke="none"/>'):format(
+      f(head.x + c.ox), f(head.y + c.oy),
+      f(base.x - dy * 0.34 * s + c.ox), f(base.y + dx * 0.34 * s + c.oy),
+      f(base.x + dy * 0.34 * s + c.ox), f(base.y - dx * 0.34 * s + c.oy)))
+   emit(c, "  </g>")
+end
+
+--- The first aim for player p, over their bank's chunks and rotations and
+--- every spot, whose ghost has look `want` on heading `h` (any of theirs if
+--- nil) and passes `accept`, if given. Deterministic.
+local function find_aim(state: sim.State, p: integer, want: sim.Look, h: integer,
+                        accept?: function(sim.Shot, sim.Ghost): boolean): sim.Shot
+   local B = state.board
+   for slot = 1, #state.players[p].bank do
+      for turn = 0, 5 do
+         local shape = board.shape(B, bc.rotate(state.players[p].bank[slot], turn))
+         for _, spot in ipairs(sim.placements(state, p, shape)) do
+            local cells = board.place(B, shape, spot.x, spot.y)
+            for _, heading in ipairs(board.HEADINGS[p]) do
+               if not h or heading == h then
+                  local g = sim.ghost(state, p, cells, heading)
+                  local shot: sim.Shot = { player = p, slot = slot, heading = heading, cells = cells }
+                  if g.look == want and (not accept or accept(shot, g)) then return shot end
+               end
             end
          end
       end
-
-      -- The name runs along the wall, like the players' names do.
-      local name_angle = (60 * axis.wall + 120) % 360
-      while name_angle > 90 do name_angle = name_angle - 180 end
-      text(c, add({ x = 0, y = 0 }, u, apothem + AXIS_NAME_OFF), axis.name,
-         'font-size="12" font-style="italic" text-anchor="middle"', name_angle)
    end
-   emit(c, "  </g>")
+   error(("no %s aim for player %d"):format(want, p))
 end
 
---- One chunk: its triangles, then its silhouette in the owner's color.
-local function draw_chunk(c: Canvas, cells: {Cell}, side: number, owner: string)
-   emit(c, '  <g stroke-width="0.9" stroke-linejoin="round">')
-   for _, cell in ipairs(cells) do
-      polygon(c, board.corners(cell.a, cell.b, side),
-         ('fill="%s" stroke="%s"'):format(bc.FILL[cell.color], PAPER))
-   end
-   emit(c, "  </g>")
+--- How many steps a ghost travels from its aim.
+local function travel(B: Board, shot: sim.Shot, g: sim.Ghost): integer
+   return (g.cells[1].i - shot.cells[1].i) // B.step[shot.heading]
+end
 
-   -- The silhouette is every edge the chunk does not share with itself.
-   local inside: {string: boolean} = {}
-   for _, cell in ipairs(cells) do
-      inside[board.key(cell.a, cell.b)] = true
+--- A short note beside a ghost.
+local function note(c: Canvas, cells: {integer}, body: string, hex: string, dx: number, dy: number)
+   local B = c.board
+   local x, y = 0.0, 0.0
+   for _, i in ipairs(cells) do
+      local q = board.centroid(B.a[i], B.b[i], c.side)
+      x, y = x + q.x, y + q.y
    end
-   emit(c, ('  <g stroke="%s" stroke-width="2.6" stroke-linecap="round" fill="none">'):format(owner))
-   for _, cell in ipairs(cells) do
-      local pts = board.corners(cell.a, cell.b, side)
-      for i, nb in ipairs(bc.neighbors(cell.a, cell.b)) do
-         if not inside[board.key(nb.a, nb.b)] then
-            -- `neighbors` and `cell_corners` both run counterclockwise from the
-            -- same start, so neighbour i faces the edge opposite corner i.
-            line(c, pts[i % 3 + 1], pts[(i + 1) % 3 + 1], "")
-         end
+   text(c, { x = x / #cells + dx, y = y / #cells + dy }, body,
+      ('fill="%s" font-size="13" font-weight="600" text-anchor="middle" stroke="%s" stroke-width="4" paint-order="stroke"'):format(hex, PAPER))
+end
+
+local function render_board(B: Board, side: number, labels: boolean): string
+   local c = canvas(B, side)
+   draw_board(c)
+   if labels then draw_labels(c) else draw_names(c) end
+   title(c, ("The board: notched hexagon, diameter %d, notch %d"):format(2 * B.n, B.r),
+      "each home is a V outside the dashed middle &#183; its black outline is its back wall")
+   emit(c, "</svg>")
+   return table.concat(c.parts, "\n") .. "\n"
+end
+
+local function render_shots(B: Board, side: number, size: integer, seed: integer, labels: boolean): string
+   local state = sim.new(B, size, bc.seeded_random(seed))
+   local straight1 = board.HEADINGS[1][2]
+
+   -- Player 1 straight across, then a pile at rest in the middle just ahead,
+   -- far enough out that it lies wholly in the middle but close enough that the
+   -- shot stops with part still in Player 1's home.
+   local mine = find_aim(state, 1, "clear", straight1)
+   local pile: {Tri} = nil
+   for k = 1, 2 * B.s do
+      local ahead, stop = true, false
+      local moved: {Tri} = {}
+      for n, t in ipairs(mine.cells) do
+         local i = t.i + (k + 1) * B.step[straight1]
+         moved[n] = { i = i, color = bc.COLORS[(n % 3) + 1] }
+         if B.kind[i] ~= board.MIDDLE then ahead = false end
+         if B.kind[t.i + k * B.step[straight1]] == 1 then stop = true end
+      end
+      if ahead and stop then pile = moved break end
+   end
+   if not pile then error("no spot for the pile") end
+   sim.add_chunk(state, 3, board.HEADINGS[3][2], pile).flying = false
+   local in_pile: {integer: boolean} = {}
+   for _, t in ipairs(pile) do in_pile[t.i] = true end
+
+   -- Player 3 straight across, landing clear against a dashed line rather
+   -- than the pile.
+   local clear = find_aim(state, 3, "clear", board.HEADINGS[3][2], function(shot: sim.Shot, g: sim.Ghost): boolean
+      for _, t in ipairs(g.cells) do
+         local j = t.i + B.step[shot.heading]
+         if in_pile[j] or in_pile[t.i + B.pass[shot.heading][board.facing(t.i)]] then return false end
+      end
+      return #g.hits == 0 and travel(B, shot, g) > 0
+   end)
+   -- Player 2 on a heading that runs along their own arm into their own back
+   -- wall, far enough from it that the ghost stands apart from the aim.
+   local friendly = find_aim(state, 2, "friendly", nil, function(shot: sim.Shot, g: sim.Ghost): boolean
+      for _, t in ipairs(g.cells) do
+         if B.kind[t.i] ~= 2 then return false end
+      end
+      return #g.hits == 0 and travel(B, shot, g) >= 6
+   end)
+
+   local c = canvas(B, side)
+   draw_board(c)
+   draw_chunk(c, pile, board.PLAYERS[3].color, 1)
+   for _, shot in ipairs({ clear, friendly, mine }) do
+      local g = sim.ghost(state, shot.player, shot.cells, shot.heading)
+      local owner = board.PLAYERS[shot.player].color
+      draw_ghost(c, g)
+      draw_chunk(c, shot.cells, owner, g.look == "friendly" and 0.35 or 1)
+      draw_arrow(c, shot.cells, shot.heading, g.look == "clear" and owner or look_color(g.look))
+      if g.look == "clear" then
+         note(c, ghost_cells(g), "lands clear", INK, 0, -2.2 * side)
+      elseif g.look == "home" then
+         note(c, ghost_cells(g), "stopped in its own home", AMBER, -5.5 * side, 0.4 * side)
+      else
+         note(c, ghost_cells(g), "friendly fire", DANGER, 0, 2.6 * side)
       end
    end
-   emit(c, "  </g>")
-end
-
---- The heading: a dashed lane down the rest of the board, and a solid arrow
---- just ahead of the chunk.
-local function draw_arrow(c: Canvas, shot: board.Shot, n: integer, side: number, owner: string)
-   local centre: XY = { x = 0, y = 0 }
-   for _, cell in ipairs(shot.cells) do
-      local p = board.centroid(cell.a, cell.b, side)
-      centre.x, centre.y = centre.x + p.x, centre.y + p.y
-   end
-   centre.x, centre.y = centre.x / #shot.cells, centre.y / #shot.cells
-
-   -- Clear the chunk itself before starting the arrow.
-   local lead = 0.0
-   for _, cell in ipairs(shot.cells) do
-      local p = board.centroid(cell.a, cell.b, side)
-      local d = dot({ x = p.x - centre.x, y = p.y - centre.y }, shot.dir)
-      if d > lead then lead = d end
-   end
-   lead = lead + side * 0.9
-
-   local runway = board.exit_distance(n, side, centre, shot.dir) - side * 0.35
-   if runway <= lead then return end
-
-   local tail = add(centre, shot.dir, lead)
-   local head = add(centre, shot.dir, math.min(lead + side * 2.6, runway))
-   local far = add(centre, shot.dir, runway)
-
-   emit(c, ('  <g stroke="%s" fill="%s">'):format(owner, owner))
-   line(c, head, far, 'stroke-width="1.6" stroke-dasharray="3 7" opacity="0.45"')
-   line(c, tail, head, 'stroke-width="3.4" stroke-linecap="round"')
-   local perp: XY = { x = -shot.dir.y, y = shot.dir.x }
-   local base = add(head, shot.dir, -side * 0.72)
-   polygon(c, {
-      head,
-      add(base, perp, side * 0.34),
-      add(base, perp, -side * 0.34),
-   }, 'stroke="none"')
-   emit(c, "  </g>")
-end
-
-local function title(c: Canvas, n: integer, side: number, body: string, note: string)
-   local top = -(n * side * SQRT3 / 2)
-   text(c, { x = 0, y = top - 80 }, body,
-      ('fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="19"'
-         .. ' font-weight="600" text-anchor="middle" dominant-baseline="middle"'):format(INK), 0)
-   text(c, { x = 0, y = top - 60 }, note,
-      ('fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="12"'
-         .. ' text-anchor="middle" dominant-baseline="middle"'):format(GRID), 0)
-end
-
---- The empty board.
-local function render_board(n: integer, side: number): string
-   local r = n * side
-   local apothem = r * SQRT3 / 2
-   local c = canvas(2 * r + 2 * PAD_X, 2 * apothem + 2 * PAD_Y, PAD_Y + apothem)
-   draw_grid(c, n, side)
-   draw_walls(c, n, side, nil)
-   draw_axes(c, n, side)
-   return finish(c)
-end
-
---- The board with one shot per player.
-local function render_turn(n: integer, side: number, turn: Turn, size: integer, seed: integer): string
-   local r = n * side
-   local apothem = r * SQRT3 / 2
-   local c = canvas(2 * r + 2 * PAD_X, 2 * apothem + 2 * PAD_Y + TITLE_H, PAD_Y + TITLE_H + apothem)
-   local rng = bc.seeded_random(seed)
-
-   draw_grid(c, n, side)
-   local shots: {board.Shot} = {}
-   for p = 1, #board.PLAYERS do
-      shots[p] = board.shoot(n, p, turn, size, rng)
-      draw_chunk(c, shots[p].cells, side, board.PLAYERS[p].color)
-   end
-   draw_walls(c, n, side, turn)
-   draw_axes(c, n, side)
-   for p, shot in ipairs(shots) do
-      draw_arrow(c, shot, n, side, board.PLAYERS[p].color)
-   end
-
-   title(c, n, side,
-      turn == "A" and "Turn A &#8212; clockwise" or "Turn B &#8212; counterclockwise",
-      "solid wall = your own &#183; dashed = also yours to fire from this turn")
-   return finish(c)
+   note(c, indices(pile), "a pile at rest", MUTED, 4.2 * side, 0.4 * side)
+   if labels then draw_labels(c) end
+   title(c, "Aims and their ghosts",
+      "ink: lands clear &#183; amber: lands in your own home &#183; red: friendly fire")
+   emit(c, "</svg>")
+   return table.concat(c.parts, "\n") .. "\n"
 end
 
 local function write(path: string, body: string)
@@ -361,33 +385,25 @@ local function write(path: string, body: string)
 end
 
 local function main(argv: {string})
-   local function flag(name: string, fallback: number): number
-      for i, a in ipairs(argv) do
-         if a == "--" .. name then
-            local v = tonumber(argv[i + 1])
-            if not v then error("--" .. name .. " needs a number") end
-            return v
-         end
-      end
-      return fallback
-   end
    local function opt(name: string, fallback: string): string
       for i, a in ipairs(argv) do
          if a == "--" .. name then return argv[i + 1] or fallback end
       end
       return fallback
    end
-
-   local n = math.floor(flag("n", 11))
-   local side = flag("side", 26)
-   local size = math.floor(flag("size", 14))
-   local seed = math.floor(flag("seed", 7))
+   local n, r = board.options(argv)
+   local side = tonumber(opt("side", "20")) or error("--side needs a number")
+   local size = math.floor(tonumber(opt("size", "14")) or error("--size needs a number"))
+   local seed = math.floor(tonumber(opt("seed", "7")) or error("--seed needs a number"))
    local dir = opt("out", "images")
-
+   local labels = false
+   for _, a in ipairs(argv) do
+      if a == "--cells" then labels = true end
+   end
+   local B = board.new(n, r)
    os.execute(("mkdir -p '%s'"):format(dir))
-   write(dir .. "/board.svg", render_board(n, side))
-   write(dir .. "/turn-a.svg", render_turn(n, side, "A", size, seed))
-   write(dir .. "/turn-b.svg", render_turn(n, side, "B", size, seed))
+   write(dir .. "/board.svg", render_board(B, side, labels))
+   write(dir .. "/shots.svg", render_shots(B, side, size, seed, labels))
 end
 
 main(_G.arg as {string} or {})

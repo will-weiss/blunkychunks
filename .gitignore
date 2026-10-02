@@ -1,3 +1,5 @@
 build/
 *.lua
 !tlconfig.lua
+.love-runtimes/
+dist/
