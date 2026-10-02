@@ -1,9 +1,33 @@
 --- Draws alternative board layouts cut from the triangular tiling, to SVG.
 ---
----   tl run layouts.tl                         # images/layouts/*.svg
----   tl run layouts.tl -- --n 6 --side 20      # inner hexagon of side 6
----   tl run layouts.tl -- --n 10 --r 3         # setback of 3 rows
+---   tl run layouts.tl                         # every board into images/layouts/
+---   tl run layouts.tl -- --board notched-hexagon --diameter 12 --notch 5
+---                                             # -> notched-hexagon-12-5.svg
+---   tl run layouts.tl -- --side 30            # draw each triangle 30px wide
+---   tl run layouts.tl -- --cells              # label every cell (x, y); *-cells.svg
 ---   tl run layouts.tl -- --out /tmp/layouts   # somewhere other than images/layouts
+---
+--- Boards: hexagon, triangle, hexagram, truncated-hexagram, notched-hexagon.
+---
+---   --diameter  the central hexagon's width in triangles, so its side n is
+---               half of it (must be even; default 20)
+---   --notch     the setback r: rows kept on each star point, which is also the
+---               side of each notch (default diameter / 4)
+---
+--- Cell labels
+--- -----------
+--- With --cells each triangle is labelled (x, y), counted from the board's
+--- southwest corner so both are never negative:
+---
+---   y  the row, 0 along the bottom and one more per row going north
+---   x  the triangle's place along its row, one per triangle going east, with
+---      the columns leaning northwest (parallel to the southwest wall), so
+---      x stays the same climbing that wall and (0, 0) is the corner triangle
+---
+--- Up and down triangles alternate along a row, so x + y is even for one
+--- orientation and odd for the other. Labels are derived from (a, b) with
+--- integer arithmetic only: b already counts half-triangle steps east, and the
+--- horizontal strip k1 counts rows.
 ---
 --- Standalone: it reads board.strips for the lattice geometry but nothing in
 --- the game consults these shapes.
@@ -40,6 +64,13 @@
 --- (2r^2 cells), and filling it restores that corner of the outer hexagon.
 --- Filling every other one (corners 0, 2, 4: east, southwest, northwest)
 --- keeps the board's three-fold symmetry.
+---
+--- The cells outside the hexagram are exactly those past two neighbouring
+--- walls, so the cropped star is the outer hexagon minus all six notches, and
+--- the notched hexagon is it minus just corners 1, 3 and 5. Put that way it
+--- needs no star points to crop, so r can exceed n: opposite walls can't both
+--- be crossed, so the three notches never overlap, and the count is
+--- 6(n + r)^2 - 6r^2 for any r.
 
 local bc = require("blunkychunks")
 local board = require("board")
@@ -63,11 +94,13 @@ end
 
 --- A layout: a name, a one-line note, and an exact membership test.
 local record Layout
-   file: string
+   file: string -- the board's name, as --board takes it
+   params: {integer} -- what the image name adds after it: diameter, then notch
    name: string
    note: string
    contains: function(integer, integer): boolean
    expect: integer -- the cell count the formula above predicts
+   invalid: string -- why this board can't be drawn with these settings, if it can't
 end
 
 local function in_up(n: integer, a: integer, b: integer): boolean
@@ -102,30 +135,30 @@ local function beyond(n: integer, j: integer, a: integer, b: integer): boolean
    return v < -n
 end
 
---- The cropped star with the notches at `corners` filled in. Corner j sits
---- between walls j - 1 and j, so its notch is the cells past both.
-local function filled_star(n: integer, r: integer, corners: {integer}): function(integer, integer): boolean
-   local base = star(n, r)
+--- The hexagon of side n + r with the notches at `corners` cut out. Corner j
+--- sits between walls j - 1 and j, so its notch is the cells past both.
+local function notched(n: integer, r: integer, corners: {integer}): function(integer, integer): boolean
    return function(a: integer, b: integer): boolean
-      if base(a, b) then return true end
       if not board.contains(n + r, a, b) then return false end
       for _, j in ipairs(corners) do
-         if beyond(n, (j - 1) % 6, a, b) and beyond(n, j, a, b) then return true end
+         if beyond(n, (j - 1) % 6, a, b) and beyond(n, j, a, b) then return false end
       end
-      return false
+      return true
    end
 end
 
-local function layouts(n: integer, setback: integer): {Layout}
-   local out: {Layout} = {
+--- Every board, or the reason it can't be drawn at this size.
+local function layouts(n: integer, r: integer): {Layout}
+   local cropped = 6 * n * n + 6 * (n * n - (n - r) * (n - r))
+   return {
       {
-         file = "hexagon", name = ("Hexagon, side %d"):format(n),
-         note = "the inner hexagon every star below is built on",
+         file = "hexagon", params = { 2 * n }, name = ("Hexagon, side %d"):format(n),
+         note = "the central hexagon every star is built on",
          contains = function(a: integer, b: integer): boolean return board.contains(n, a, b) end,
          expect = 6 * n * n,
       },
       {
-         file = "triangle", name = ("Triangle, side %d"):format(3 * n),
+         file = "triangle", params = { 2 * n }, name = ("Triangle, side %d"):format(3 * n),
          note = "one of the hexagram's two triangles",
          contains = function(a: integer, b: integer): boolean
             return bc.is_cell(a, b) and in_up(n, a, b)
@@ -133,36 +166,27 @@ local function layouts(n: integer, setback: integer): {Layout}
          expect = 9 * n * n,
       },
       {
-         file = "hexagram", name = ("Hexagram, inner side %d"):format(n),
+         file = "hexagram", params = { 2 * n }, name = ("Hexagram, inner side %d"):format(n),
          note = "both triangles, points sharp",
          contains = star(n, n),
          expect = 12 * n * n,
       },
-   }
-   local seen: {integer: boolean} = {}
-   for _, r in ipairs({ n // 4, setback, (3 * n) // 4 }) do
-      if r > 0 and r < n and not seen[r] then
-         seen[r] = true
-         out[#out + 1] = {
-            file = ("star-cropped-%d"):format(r),
-            name = ("Cropped star, inner side %d, %d of %d rows kept"):format(n, r, n),
-            note = ("flat faces %d long, slanted edges %d long"):format(n - r, r),
-            contains = star(n, r),
-            expect = 6 * n * n + 6 * (n * n - (n - r) * (n - r)),
-         }
-      end
-   end
-   local r = setback
-   if r > 0 and r <= n then
-      out[#out + 1] = {
-         file = ("star-cropped-%d-filled"):format(r),
-         name = ("Cropped star, %d of %d rows kept, three notches filled"):format(r, n),
+      {
+         file = "truncated-hexagram", params = { 2 * n, r },
+         name = ("Truncated hexagram, inner side %d, notch %d"):format(n, r),
+         note = ("flat faces %d long, slanted edges %d long"):format(n - r, r),
+         contains = star(n, r),
+         expect = cropped,
+         invalid = r >= n and ("--notch must be below the inner side %d"):format(n) or nil,
+      },
+      {
+         file = "notched-hexagon", params = { 2 * n, r },
+         name = ("Notched hexagon, inner side %d, notch %d"):format(n, r),
          note = "east, southwest and northwest notches filled in",
-         contains = filled_star(n, r, { 0, 2, 4 }),
-         expect = 6 * n * n + 6 * (n * n - (n - r) * (n - r)) + 3 * 2 * r * r,
-      }
-   end
-   return out
+         contains = notched(n, r, { 1, 3, 5 }),
+         expect = 6 * (n + r) * (n + r) - 3 * 2 * r * r,
+      },
+   }
 end
 
 --- Every cell of a layout. The hexagram's points reach 2n strips out, and the
@@ -199,9 +223,32 @@ local function seg(p: XY, q: XY, ox: number, oy: number, attrs: string): string
       :format(f(p.x + ox), f(p.y + oy), f(q.x + ox), f(q.y + oy), attrs)
 end
 
+--- Every cell's (x, y) label, keyed by board.key, as described at the top.
+local function cell_labels(cells: {AB}): {string: {integer, integer}}
+   local k1max = -math.huge
+   for _, c in ipairs(cells) do
+      local k1 = board.strips(c.a, c.b)
+      if k1 > k1max then k1max = k1 end
+   end
+   local qmin = math.huge
+   local raw: {{integer, integer}} = {}
+   for i, c in ipairs(cells) do
+      local y = math.floor(k1max - board.strips(c.a, c.b))
+      local q = c.b + y
+      raw[i] = { q, y }
+      if q < qmin then qmin = q end
+   end
+   local out: {string: {integer, integer}} = {}
+   for i, c in ipairs(cells) do
+      out[board.key(c.a, c.b)] = { math.floor(raw[i][1] - qmin), raw[i][2] }
+   end
+   return out
+end
+
 --- One layout as an SVG: point-up cells shaded, the grid, the inner hexagon's
---- outline for reference, and the shape's outline (edges only one cell owns).
-local function render(n: integer, side: number, l: Layout, cells: {AB}): string
+--- outline for reference, the shape's outline (edges only one cell owns) and,
+--- if asked, every cell's (x, y).
+local function render(n: integer, side: number, l: Layout, cells: {AB}, labels: boolean): string
    local edges: {string: {XY}} = {}
    local count: {string: integer} = {}
    local order: {string} = {}
@@ -265,6 +312,21 @@ local function render(n: integer, side: number, l: Layout, cells: {AB}): string
    end
    emit("  </g>")
 
+   if labels then
+      local xy = cell_labels(cells)
+      emit(('  <g fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="%s"'
+         .. ' text-anchor="middle" dominant-baseline="central">'):format(INK, f(side * 0.2)))
+      for _, c in ipairs(cells) do
+         local p = board.centroid(c.a, c.b, side)
+         -- Nudge toward the wide end of the triangle, where there's more room.
+         local nudge = side * 0.05
+         local v = xy[board.key(c.a, c.b)]
+         emit(('    <text x="%s" y="%s">%d,%d</text>'):format(
+            f(p.x + ox), f(p.y + oy + (bc.is_up(c.a, c.b) and nudge or -nudge)), v[1], v[2]))
+      end
+      emit("  </g>")
+   end
+
    local font = 'font-family="Helvetica, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle"'
    emit(('  <text x="%s" y="%s" fill="%s" %s font-size="19" font-weight="600">%s</text>')
       :format(f(w / 2), f(PAD + 4), INK, font, l.name))
@@ -289,20 +351,56 @@ local function main(argv: {string})
       return fallback
    end
 
-   local n = math.floor(tonumber(opt("n", "10")) or error("--n needs a number"))
-   local r = math.floor(tonumber(opt("r", tostring(n // 2))) or error("--r needs a number"))
-   local side = tonumber(opt("side", "22")) or error("--side needs a number")
+   local function int(name: string, fallback: integer): integer
+      local v = tonumber(opt(name, tostring(fallback)))
+      if not v or v ~= math.floor(v) then error("--" .. name .. " needs a whole number") end
+      return math.floor(v)
+   end
+
+   local diameter = int("diameter", 20)
+   if diameter < 2 or diameter % 2 ~= 0 then
+      error("--diameter must be a positive even number of triangles")
+   end
+   local n = diameter // 2
+   local r = int("notch", n // 2)
+   if r < 1 then error("--notch must be at least 1") end
+   local labels = false
+   for _, a in ipairs(argv) do
+      if a == "--cells" then labels = true end
+   end
+   -- Labels need bigger triangles to be legible.
+   local side = tonumber(opt("side", labels and "40" or "22")) or error("--side needs a number")
    local dir = opt("out", "images/layouts")
+   local pick = opt("board", nil)
+
+   local all = layouts(n, r)
+   local chosen: {Layout} = {}
+   for _, l in ipairs(all) do
+      if not pick or l.file == pick then chosen[#chosen + 1] = l end
+   end
+   if #chosen == 0 then
+      local names: {string} = {}
+      for i, l in ipairs(all) do names[i] = l.file end
+      error(("no board named %s; try one of: %s"):format(pick, table.concat(names, ", ")))
+   end
 
    os.execute(("mkdir -p '%s'"):format(dir))
-   for _, l in ipairs(layouts(n, r)) do
-      local cells = cells_of(n, l)
-      if #cells ~= l.expect then
-         error(("%s: %d cells, expected %d"):format(l.file, #cells, l.expect))
+   for _, l in ipairs(chosen) do
+      if l.invalid then
+         if pick then error(l.file .. ": " .. l.invalid) end
+         print(("skipped %s: %s"):format(l.file, l.invalid))
+      else
+         local cells = cells_of(n, l)
+         if #cells ~= l.expect then
+            error(("%s: %d cells, expected %d"):format(l.file, #cells, l.expect))
+         end
+         local stem = l.file
+         for _, v in ipairs(l.params) do stem = stem .. "-" .. v end
+         if labels then stem = stem .. "-cells" end
+         local path = ("%s/%s.svg"):format(dir, stem)
+         write(path, render(n, side, l, cells, labels))
+         print(("wrote %s (%d triangles)"):format(path, #cells))
       end
-      local path = ("%s/%s.svg"):format(dir, l.file)
-      write(path, render(n, side, l, cells))
-      print(("wrote %s (%d triangles)"):format(path, #cells))
    end
 end
 

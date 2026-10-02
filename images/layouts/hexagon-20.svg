@@ -1237,5 +1237,5 @@
     <line x1="360.00" y1="467.05" x2="371.00" y2="448.00"/>
   </g>
   <text x="250.00" y="34.00" fill="#1f2933" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" font-size="19" font-weight="600">Hexagon, side 10</text>
-  <text x="250.00" y="56.00" fill="#9aa5b1" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" font-size="12">the inner hexagon every star below is built on &#183; 600 triangles</text>
+  <text x="250.00" y="56.00" fill="#9aa5b1" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" font-size="12">the central hexagon every star is built on &#183; 600 triangles</text>
 </svg>
