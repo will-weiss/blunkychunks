@@ -333,7 +333,8 @@ local function menu_legend(): {draw.KeyGroup}
          { "Up Down", "choose" }, { "Left Right", "change" }, { "Enter", "start" }, { "Esc", "quit" },
       } },
       { title = "Controller", keys = {
-         { "D-pad / stick", "choose, change" }, { "Start", ("%s, then start"):format(start) }, { "B / Back", "leave" },
+         { "D-pad / stick", "choose, change" }, { "A", "select" },
+         { "Start", ("%s, then start"):format(start) }, { "B / Back", "leave" },
       } },
    }
 end
@@ -394,12 +395,10 @@ local function menu_button(pad: love.Joystick, button: string)
    local seated = setup.seat_of(menu, "pad", pad)
    if MENU_BUTTONS[button] then
       menu_step(MENU_BUTTONS[button])
-   elseif button == "start" or button == "a" then
-      if not seated then
-         setup.join(menu, pad)
-      elseif button == "start" or setup.on_start(menu) then
-         start_match()
-      end
+   elseif button == "a" then
+      if setup.press(menu, pad, gamepads()) then start_match() end
+   elseif button == "start" then
+      if seated then start_match() else setup.join(menu, pad) end
    elseif button == "b" or button == "back" then
       setup.leave(menu, "pad", pad)
    end
@@ -542,6 +541,7 @@ function love.keypressed(key: string)
 end
 
 function love.keyreleased(key: string)
+   if menu then return end
    local seat = seat_of(game, "keys")
    if seat then controls.release(seat, controls.key_action(key)) end
 end

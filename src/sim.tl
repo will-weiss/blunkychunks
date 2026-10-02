@@ -62,6 +62,7 @@ local record sim
    record Ghost
       cells: {board.Tri} -- where what's left of the shot comes to rest
       hits: {board.Tri} -- the shot's triangles that clear, where they clear
+      cleared: {board.Tri} -- the triangles at rest they clear
       look: Look
    end
 
@@ -498,6 +499,7 @@ function sim.ghost(state: State, p: integer, cells: {Tri}, heading: integer): si
    for k, c in ipairs(cells) do shot[k] = { i = c.i, color = c.color } end
    local pieces: {{Tri}} = #shot > 0 and { shot } or {}
    local hits: {Tri} = {}
+   local struck: {Tri} = {}
    -- The shot's triangles by where they are, and which piece each is in.
    local mine: {integer: Tri}
    local piece_of: {integer: integer}
@@ -528,7 +530,12 @@ function sim.ghost(state: State, p: integer, cells: {Tri}, heading: integer): si
          end
       end
       if next(hit) then
-         for _, j in ipairs(cleared) do gone[j] = true end
+         for _, j in ipairs(cleared) do
+            if not gone[j] then
+               gone[j] = true
+               struck[#struck + 1] = { i = j, color = bc.COLORS[paint[j]] }
+            end
+         end
          local kept: {{Tri}} = {}
          for _, piece in ipairs(pieces) do
             local left: {Tri} = {}
@@ -591,7 +598,7 @@ function sim.ghost(state: State, p: integer, cells: {Tri}, heading: integer): si
          if look == "clear" and kind[t.i] == p then look = "home" end
       end
    end
-   return { cells = landed, hits = hits, look = look }
+   return { cells = landed, hits = hits, cleared = struck, look = look }
 end
 
 --- Player `p`'s shot clock ran out: their aim `shot` fires. If they have no

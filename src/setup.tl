@@ -167,6 +167,20 @@ function setup.change(s: State, dx: integer, pads: {love.Joystick})
    end
 end
 
+--- `pad` presses A on the row under the cursor: an option steps on, a
+--- player's row seats `pad` there, and Start starts. Returns whether to
+--- start the match.
+function setup.press(s: State, pad: love.Joystick, pads: {love.Joystick}): boolean
+   local row = s.cursor
+   if row == start_row() then return true end
+   if row >= FIRST_PLAYER_ROW then
+      sit(s, row - FIRST_PLAYER_ROW + 1, "pad", pad)
+   else
+      setup.change(s, 1, pads)
+   end
+   return false
+end
+
 --- What to call a pick on screen: `pads` numbers the gamepads.
 local function pick_name(pick: Pick, pads: {love.Joystick}): string
    if pick.kind == "bot" then return "Bot" end

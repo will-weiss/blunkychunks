@@ -52,6 +52,95 @@ function T.refresh_keeps_a_legal_aim_and_replaces_a_stale_one()
    A.truthy(sim.legal(s, 2, bots.refresh(s, 2, nil).cells), "and a missing one chosen afresh")
 end
 
+--- Player 1's bank, every triangle `color`.
+local function paint_bank(s: sim.State, color: bc.Color)
+   for _, chunk in ipairs(s.players[1].bank) do
+      for _, c in ipairs(chunk) do c.color = color end
+   end
+end
+
+--- A triangle of `color` at rest at `i`.
+local function rest(s: sim.State, owner: integer, i: integer, color: bc.Color)
+   sim.add_chunk(s, owner, board.HEADINGS[owner][2], { { i = i, color = color } }).flying = false
+end
+
+--- How a ghost scores for greedyclear: at-rest triangles it clears from
+--- Player p's home, and triangles it clears in all.
+local function clears(s: sim.State, p: integer, g: sim.Ghost): integer, integer
+   local home = 0
+   for _, t in ipairs(g.cleared) do
+      if s.board.kind[t.i] == p then home = home + 1 end
+   end
+   return home, #g.hits + #g.cleared
+end
+
+function T.greedyclear_clears_a_triangle_left_in_its_home()
+   local s = fresh()
+   paint_bank(s, "red")
+   -- A red at rest on Player 1's dashed line, where every shot heads out.
+   local B = s.board
+   local i: integer = nil
+   for _, j in ipairs(B.homes[1]) do
+      for _, d in ipairs(B.near[board.facing(j)]) do
+         if B.kind[j + d] == board.MIDDLE then i = j end
+      end
+      if i then break end
+   end
+   rest(s, 2, i, "red")
+   local shot = bots.choose(s, 1, "greedyclear")
+   A.truthy(sim.legal(s, 1, shot.cells), "legal")
+   local home = clears(s, 1, sim.ghost(s, 1, shot.cells, shot.heading))
+   A.truthy(home >= 1, "clears the red from its home")
+end
+
+function T.greedyclear_clears_what_it_can_elsewhere_when_its_home_is_empty()
+   local s = fresh()
+   paint_bank(s, "red")
+   local B = s.board
+   local mid: {integer} = {}
+   for _, j in ipairs(B.cells) do
+      if B.kind[j] == board.MIDDLE then mid[#mid + 1] = j end
+   end
+   rest(s, 2, mid[math.floor(#mid / 2)], "red")
+   local shot = bots.choose(s, 1, "greedyclear")
+   local _, all = clears(s, 1, sim.ghost(s, 1, shot.cells, shot.heading))
+   A.truthy(all >= 2, "clears the red in the middle, and itself with it")
+end
+
+--- On a busy board, frozen at rest so the ghosts see everything, no legal
+--- shot beats greedyclear's: none clears more from its home, and of those
+--- that clear as much none clears more in all.
+function T.greedyclear_takes_the_best_shot_there_is()
+   local s = fresh()
+   for _ = 1, 4 do
+      for p = 1, 3 do sim.lock_in(s, p, bots.choose(s, p)) end
+      for _ = 1, 6 do sim.tick(s) end
+   end
+   for _, chunk in ipairs(s.chunks) do chunk.flying = false end
+   for p = 1, 3 do
+      if s.players[p].alive then
+         local shot = bots.choose(s, p, "greedyclear")
+         local home, all = clears(s, p, sim.ghost(s, p, shot.cells, shot.heading))
+         for _, chunk in ipairs(s.players[p].bank) do
+            for turn = 0, 5 do
+               local shape = board.shape(s.board, bc.rotate(chunk, turn))
+               for _, spot in ipairs(sim.placements(s, p, shape)) do
+                  local cells = board.place(s.board, shape, spot.x, spot.y)
+                  for _, h in ipairs(board.HEADINGS[p]) do
+                     local g = sim.ghost(s, p, cells, h)
+                     if g.look ~= "friendly" then
+                        local h2, a2 = clears(s, p, g)
+                        A.truthy(h2 < home or (h2 == home and a2 <= all),
+                           ("Player %d: %d/%d beats greedyclear's %d/%d"):format(p, h2, a2, home, all))
+                     end
+                  end
+               end
+            end
+         end
+      end
+   end
+end
+
 --- On a board whose homes are smaller than a chunk nothing ever fits, so the
 --- players go out in turn as their clocks run out, and the last one's left
 --- standing: no crash.
