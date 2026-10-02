@@ -5,7 +5,7 @@
 --- function is run in a pcall; a failure prints its message and the run exits
 --- non-zero so `make test` fails.
 
-local SUITES: {string} = { "board", "sim", "bots", "controls", "setup" }
+local SUITES: {string} = { "board", "sim", "match", "bots", "controls", "setup", "wire", "net" }
 
 local argv = _G.arg as {string} or {}
 local suites: {string} = #argv > 0 and argv or SUITES

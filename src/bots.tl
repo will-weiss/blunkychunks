@@ -60,12 +60,12 @@ local function options(state: sim.State, p: integer): {Option}
    for slot = 1, #state.players[p].bank do
       for turn = 0, 5 do out[#out + 1] = { slot = slot, turn = turn } end
    end
-   shuffle(out, state.rng)
+   shuffle(out, state.think)
    return out
 end
 
 local function random_shot(state: sim.State, p: integer): sim.Shot
-   local B, rng = state.board, state.rng
+   local B, rng = state.board, state.think
    local bank = state.players[p].bank
    local best: sim.Shot = nil
    local best_rank = 0
@@ -107,7 +107,7 @@ local function better(x: {integer}, y: {integer}): boolean
 end
 
 local function greedy_shot(state: sim.State, p: integer): sim.Shot
-   local B, rng = state.board, state.rng
+   local B, rng = state.board, state.think
    local bank = state.players[p].bank
    local best: sim.Shot = nil
    local best_score: {integer} = nil

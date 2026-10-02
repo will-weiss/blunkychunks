@@ -3,12 +3,16 @@
 ---
 --- A match is a `State`: the board, the chunks on it with their headings, an
 --- occupancy matrix, and each player's bank and status. Play is continuous and
---- the caller runs the clocks:
+--- match.tl runs the clocks:
 ---
 ---   * every tick, `tick` slides each chunk that can move by one step;
 ---   * each player has their own shot clock, staggered so they run out in
----     turn (`clocks`, `run_down`); when one does, `lock_in` fires that
----     player's aim, or knocks them out if they have no legal one.
+---     turn; when one does, `lock_in` fires that player's aim (an `Intent`
+---     made legal by `settle`), or knocks them out if they have no legal one.
+---
+--- Everything here is deterministic: the same seed and the same shots give
+--- the same match, bit for bit, on any machine (see `hash`). That is what
+--- lets every player in a networked match keep their own copy of it.
 ---
 --- A step is blocked by a wall, by another player's home (their dashed line),
 --- or by a triangle that isn't moving the same way. Your own dashed line never
@@ -50,6 +54,31 @@ local record sim
       bank: {{bc.Cell}}
    end
 
+   --- What a player is trying to aim, as it goes over the network: a bank
+   --- slot, a rotation, the heading they prefer (1..3 of their three) and
+   --- where along their back wall they want it, as `want`, the Eisenstein sum
+   --- of its triangles' coordinates over `count` triangles. `settle` turns it
+   --- into the legal shot nearest to that, against the board as it is.
+   record Intent
+      slot: integer
+      turn: integer -- rotation, 0..5 sixths of a turn counterclockwise
+      prefer: integer
+      want: bc.AB
+      count: integer
+   end
+
+   --- An intent settled against the board: its shape, every legal spot for
+   --- it in order along the back wall, the spot used (nil if none fits),
+   --- its triangles there, the heading used (1..3) and the shot.
+   record Settled
+      shape: board.Shape
+      spots: {board.Spot}
+      pick: integer
+      cells: {board.Tri}
+      heading: integer
+      shot: Shot
+   end
+
    --- One player's aim for a shot clock: which bank slot it uses (nil for
    --- none), its heading and the triangles it would place.
    record Shot
@@ -88,7 +117,8 @@ local record sim
       by_id: {integer: Chunk}
       players: {Player}
       next_id: integer
-      rng: function(): number
+      rng: function(): number -- the banks' chunks: part of the match
+      think: function(): number -- the bots' choices: never part of the match
    end
 
    BANK: integer
@@ -103,8 +133,10 @@ local MIDDLE <const> = board.MIDDLE
 
 sim.BANK = 3
 
---- A fresh match on board `B` with chunks of `size` triangles.
-function sim.new(B: board.Board, size: integer, rng: function(): number): State
+--- A fresh match on board `B` with chunks of `size` triangles, drawn from
+--- `rng`. Bots think with `think` (a fixed stream if left out), so however
+--- much a bot thinks, the chunks dealt stay the same.
+function sim.new(B: board.Board, size: integer, rng: (function(): number), think?: (function(): number)): State
    local players: {sim.Player} = {}
    for p = 1, #board.PLAYERS do
       local bank: {{bc.Cell}} = {}
@@ -123,6 +155,7 @@ function sim.new(B: board.Board, size: integer, rng: function(): number): State
       players = players,
       next_id = 1,
       rng = rng,
+      think = think or bc.seeded_random(1),
    }
 end
 
@@ -176,6 +209,9 @@ local function remove_cells(state: State, gone: {integer: boolean}): {Chunk}
          end
       end
    end
+   -- `pairs` has no fixed order, and the order here decides which pieces
+   -- of a split get which new ids.
+   table.sort(touched, function(x: Chunk, y: Chunk): boolean return x.id < y.id end)
    for _, chunk in ipairs(touched) do
       local kept: {Tri} = {}
       for _, c in ipairs(chunk.cells) do
@@ -472,6 +508,91 @@ function sim.friendly(state: State, p: integer, cells: {Tri}, heading: integer):
    return false
 end
 
+--- Sums of the Eisenstein coordinates of `cells`.
+function sim.centre(B: board.Board, cells: {Tri}): bc.AB
+   local a, b = 0, 0
+   for _, t in ipairs(cells) do a, b = a + B.a[t.i], b + B.b[t.i] end
+   return { a = a, b = b }
+end
+
+--- Squared distance (times count^2) between two centroids given as sums, by
+--- the Eisenstein norm N(x + yw) = x^2 - xy + y^2. Exact.
+local function far(u: bc.AB, nu: integer, v: bc.AB, nv: integer): integer
+   local x, y = u.a * nv - v.a * nu, u.b * nv - v.b * nu
+   return x * x - x * y + y * y
+end
+
+--- Every legal spot for `shape` in player `p`'s home, in order along the
+--- back wall, counterclockwise as drawn round the board's centre z = 1.
+--- Every home lies within a 120 degree sector of it, so the sign of the
+--- cross product orders them. Exact.
+function sim.spots(state: State, p: integer, shape: board.Shape): {board.Spot}
+   local B = state.board
+   local spots = sim.placements(state, p, shape)
+   local k = #shape.cells
+   local key: {board.Spot: bc.AB} = {}
+   for _, s in ipairs(spots) do
+      local c = sim.centre(B, board.place(B, shape, s.x, s.y))
+      key[s] = { a = c.a - k, b = c.b }
+   end
+   table.sort(spots, function(u: board.Spot, v: board.Spot): boolean
+      local x, y = key[u], key[v]
+      local cross = x.a * y.b - x.b * y.a
+      if cross ~= 0 then return cross > 0 end
+      if u.y ~= v.y then return u.y < v.y end
+      return u.x < v.x
+   end)
+   return spots
+end
+
+--- `intent` for player `p`, made legal against the board as it is: the spot
+--- nearest where it wants to be (the middle one if it doesn't say), and its
+--- preferred heading unless that would be friendly fire from there, in which
+--- case the first of straight across and the other two that isn't. Straight
+--- across gets out from anywhere in the home, so there always is one.
+--- `choose`, if given, picks the spot instead, from how many there are.
+---
+--- This is the rule lock-in plays by, so a shot clock running out a moment
+--- after the board moves under your aim fires the nearest legal shot rather
+--- than putting you out.
+function sim.settle(state: State, p: integer, intent: sim.Intent, choose?: function(integer): integer): sim.Settled
+   local B = state.board
+   local chunk = state.players[p].bank[intent.slot]
+   local out: sim.Settled = { spots = {}, heading = intent.prefer }
+   if not chunk then return out end
+   out.shape = board.shape(B, bc.rotate(chunk, intent.turn % 6))
+   out.spots = sim.spots(state, p, out.shape)
+   local n = #out.spots
+   if choose and n > 0 then
+      out.pick = math.max(1, math.min(n, choose(n)))
+   else
+      local best: integer
+      for i, s in ipairs(out.spots) do
+         local d: integer
+         if intent.want then
+            d = far(sim.centre(B, board.place(B, out.shape, s.x, s.y)), #out.shape.cells, intent.want, intent.count)
+         else
+            d = math.abs(2 * i - (n + 1)) -- twice the distance from the middle
+         end
+         if not best or d < best then best, out.pick = d, i end
+      end
+   end
+   if not out.pick then return out end
+   local s = out.spots[out.pick]
+   out.cells = board.place(B, out.shape, s.x, s.y)
+   local hs = board.HEADINGS[p]
+   if sim.friendly(state, p, out.cells, hs[intent.prefer]) then
+      for _, h in ipairs({ 2, 1, 3 }) do
+         if not sim.friendly(state, p, out.cells, hs[h]) then
+            out.heading = h
+            break
+         end
+      end
+   end
+   out.shot = { player = p, slot = intent.slot, heading = hs[out.heading], cells = out.cells }
+   return out
+end
+
 --- Where `cells`, fired by `p` on `heading`, would come to rest, played out
 --- against the board as it stands: chunks at rest stay put, and chunks in
 --- flight (and the other players' aims, which aren't on the board yet) are
@@ -621,36 +742,28 @@ function sim.lock_in(state: State, p: integer, shot: sim.Shot): sim.LockResult
    return { out = true, cleared = {} }
 end
 
---- Everyone's shot clocks at the start of a match, in seconds left. Each
---- clock runs for `period`, staggered so they run out in turn, Player 1's
---- first, a third of a clock apart: everyone's first clock is a full period
---- plus a third of one for each player before them.
-function sim.clocks(period: number): {number}
-   local n = #board.PLAYERS
-   local clocks: {number} = {}
-   for p = 1, n do clocks[p] = period + period * (p - 1) / n end
-   return clocks
-end
-
---- Run every live player's shot clock down by `dt` seconds and return the
---- players whose clocks ran out, in the order they did. Each of those starts
---- again from the moment it ran out, so the clocks keep their stagger.
-function sim.run_down(state: State, clocks: {number}, dt: number, period: number): {integer}
-   local due: {integer} = {}
-   for p, pl in ipairs(state.players) do
-      if pl.alive then
-         clocks[p] = clocks[p] - dt
-         if clocks[p] <= 0 then due[#due + 1] = p end
+--- A fingerprint of everything the match is made of: the chunks on the
+--- board, the banks and who is still in. Two copies of a match that agree on
+--- this agree on everything that matters. Integer arithmetic only, so it is
+--- the same under LuaJIT and Lua 5.4+.
+function sim.hash(state: State): integer
+   local M <const> = 2147483629 -- a prime under 2^31, so h * 257 + x stays exact
+   local h = 7
+   local function mix(x: integer)
+      h = (h * 257 + x % M) % M
+   end
+   mix(state.next_id)
+   for _, chunk in ipairs(state.chunks) do
+      mix(chunk.id); mix(chunk.owner); mix(chunk.heading); mix(chunk.fired)
+      for _, c in ipairs(chunk.cells) do mix(c.i); mix(bc.CODE[c.color]) end
+   end
+   for _, pl in ipairs(state.players) do
+      mix(pl.alive and 1 or 2)
+      for _, cells in ipairs(pl.bank) do
+         for _, c in ipairs(cells) do mix(c.a + 1000); mix(c.b + 1000); mix(bc.CODE[c.color]) end
       end
    end
-   table.sort(due, function(p: integer, q: integer): boolean
-      if clocks[p] ~= clocks[q] then return clocks[p] < clocks[q] end
-      return p < q
-   end)
-   for _, p in ipairs(due) do
-      repeat clocks[p] = clocks[p] + period until clocks[p] > 0
-   end
-   return due
+   return h
 end
 
 --- How many players are still in.

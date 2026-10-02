@@ -45,6 +45,10 @@ global record love
       quit: function(?integer)
    end
 
+   record timer
+      getTime: function(): number
+   end
+
    record ConfWindow
       title: string
       width: integer
@@ -54,10 +58,25 @@ global record love
       highdpi: boolean
    end
 
+   record ConfModules
+      audio: boolean
+      graphics: boolean
+      image: boolean
+      joystick: boolean
+      keyboard: boolean
+      mouse: boolean
+      sound: boolean
+      touch: boolean
+      video: boolean
+      window: boolean
+   end
+
    record Conf
       identity: string
       version: string
+      console: boolean
       window: ConfWindow
+      modules: ConfModules
    end
 
    conf: function(Conf)
@@ -65,6 +84,8 @@ global record love
    update: function(number)
    draw: function()
    keypressed: function(string)
+   textinput: function(string)
+   quit: function(): boolean
    keyreleased: function(string)
    gamepadpressed: function(Joystick, string)
    gamepadreleased: function(Joystick, string)

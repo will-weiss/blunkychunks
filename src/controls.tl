@@ -17,6 +17,7 @@ local record controls
       "keys"
       "pad"
       "bot"
+      "remote" -- played on another machine (or by the server's bot) in a networked match
    end
 
    --- Everything a human can ask of their seat, whatever they hold.
@@ -24,6 +25,8 @@ local record controls
       "slot1"
       "slot2"
       "slot3"
+      "slot_prev" -- the bank chunk shown left of the one in use
+      "slot_next" -- the bank chunk shown right of it
       "turn_ccw"
       "turn_cw"
       "left"
@@ -65,15 +68,12 @@ local record controls
       turns: integer -- rotations applied since the anchor, clockwise positive
    end
 
-   --- The left stick, which both places and fires. `aiming` is set for a
-   --- push that is picking a heading rather than placing, and `heading` is
-   --- the heading it points at, until it's let go.
+   --- The left stick, which both places and fires. `aiming` is set while it
+   --- points across the board, picking a heading, rather than placing.
    record Flick
       x: number
       y: number
       aiming: boolean
-      placing: boolean
-      heading: integer
    end
 
    record Seat
@@ -87,45 +87,12 @@ local record controls
       aim: Aim -- humans
       plan: sim.Shot -- bots: what they will fire
       brain: bots.Brain -- bots: how they choose it
+      name: string -- remote seats: who, as the server calls them
    end
 end
 
 local type Seat = controls.Seat
 local type Action = controls.Action
-
---- Sums of the Eisenstein coordinates of `cells`.
-local function centre(B: board.Board, cells: {board.Tri}): bc.AB
-   local a, b = 0, 0
-   for _, t in ipairs(cells) do a, b = a + B.a[t.i], b + B.b[t.i] end
-   return { a = a, b = b }
-end
-
---- Squared distance (times count^2) between two centroids given as sums, by
---- the Eisenstein norm N(x + yw) = x^2 - xy + y^2. Exact.
-local function far(u: bc.AB, nu: integer, v: bc.AB, nv: integer): integer
-   local x, y = u.a * nv - v.a * nu, u.b * nv - v.b * nu
-   return x * x - x * y + y * y
-end
-
---- Put `spots` in order along the back wall, counterclockwise as drawn round
---- the board's centre z = 1. Every home lies within a 120 degree sector of
---- it, so the sign of the cross product orders them. Exact.
-local function along_wall(B: board.Board, shape: board.Shape, spots: {board.Spot}): {board.Spot}
-   local k = #shape.cells
-   local key: {board.Spot: bc.AB} = {}
-   for _, s in ipairs(spots) do
-      local c = centre(B, board.place(B, shape, s.x, s.y))
-      key[s] = { a = c.a - k, b = c.b }
-   end
-   table.sort(spots, function(p: board.Spot, q: board.Spot): boolean
-      local u, v = key[p], key[q]
-      local cross = u.a * v.b - u.b * v.a
-      if cross ~= 0 then return cross > 0 end
-      if p.y ~= q.y then return p.y < q.y end
-      return p.x < q.x
-   end)
-   return spots
-end
 
 --- The board heading a human seat is aiming along.
 local function heading(seat: Seat): integer
@@ -138,53 +105,30 @@ local function friendly(state: sim.State, seat: Seat, n: integer): boolean
    return sim.friendly(state, seat.player, seat.aim.cells, board.HEADINGS[seat.player][n])
 end
 
---- Put the aim on its preferred heading, or if that would be friendly fire on
---- the first of straight across and the other two that isn't. Straight across
---- gets out from anywhere in the home, so there always is one.
-local function settle_heading(state: sim.State, seat: Seat)
-   local aim = seat.aim
-   aim.heading = aim.prefer
-   if not aim.pick or not friendly(state, seat, aim.prefer) then return end
-   for _, n in ipairs({ 2, 1, 3 }) do
-      if not friendly(state, seat, n) then
-         aim.heading = n
-         return
-      end
-   end
-end
-
 --- The spot of `n` along the back wall that is `along` (0..1) of the way.
 local function along_pick(along: number, n: integer): integer
    return math.max(1, math.min(n, math.floor(along * (n - 1) + 0.5) + 1))
 end
 
---- Recompute a human's aim against the board as it is now.
+--- What a human's aim is after, as sim.settle takes it (and as it goes to
+--- the server in a networked match).
+function controls.intent(aim: controls.Aim): sim.Intent
+   return { slot = aim.slot, turn = aim.turn, prefer = aim.prefer, want = aim.want, count = aim.count }
+end
+
+--- Recompute a human's aim against the board as it is now: the rules'
+--- `settle`, except that while the left stick places, it picks the spot.
 local function refresh_aim(state: sim.State, seat: Seat)
    local aim, p = seat.aim, seat.player
    if not aim or not state.players[p].alive then return end
-   local B = state.board
-   local chunk = state.players[p].bank[aim.slot]
-   aim.shape = board.shape(B, bc.rotate(chunk, aim.turn))
-   aim.spots = along_wall(B, aim.shape, sim.placements(state, p, aim.shape))
-   aim.pick = nil
-   if aim.along and #aim.spots > 0 then
-      aim.pick = along_pick(aim.along, #aim.spots)
-   else
-      local best = math.huge
-      for i, s in ipairs(aim.spots) do
-         local d = aim.want and far(centre(B, board.place(B, aim.shape, s.x, s.y)), #aim.shape.cells, aim.want, aim.count)
-            or math.abs(i - (#aim.spots + 1) / 2)
-         if d < best then best, aim.pick = d, i end
-      end
-   end
-   if aim.pick then
-      local s = aim.spots[aim.pick]
-      aim.cells = board.place(B, aim.shape, s.x, s.y)
-      settle_heading(state, seat)
+   local along = aim.along
+   local s = sim.settle(state, p, controls.intent(aim), along and function(n: integer): integer return along_pick(along, n) end)
+   aim.shape, aim.spots, aim.pick, aim.heading = s.shape, s.spots, s.pick, s.heading
+   if s.pick then
+      aim.cells = s.cells
       aim.ghost = sim.ghost(state, p, aim.cells, heading(seat))
-      if not aim.want or aim.along then aim.want, aim.count = centre(B, aim.cells), #aim.cells end
+      if not aim.want or aim.along then aim.want, aim.count = sim.centre(state.board, aim.cells), #aim.cells end
    else
-      aim.heading = aim.prefer
       aim.ghost = nil
    end
 end
@@ -209,7 +153,7 @@ local function choose_spot(state: sim.State, seat: Seat, i: integer)
    local s = aim.spots[i]
    if not s then return end
    local cells = board.place(state.board, aim.shape, s.x, s.y)
-   aim.want, aim.count = centre(state.board, cells), #cells
+   aim.want, aim.count = sim.centre(state.board, cells), #cells
    refresh_aim(state, seat)
 end
 
@@ -229,7 +173,7 @@ function controls.human(state: sim.State, p: integer, kind: controls.Kind, pad?:
 end
 
 function controls.is_human(seat: Seat): boolean
-   return seat.kind ~= "bot"
+   return seat.kind == "keys" or seat.kind == "pad"
 end
 
 --- The board heading a human seat is aiming along.
@@ -246,9 +190,8 @@ end
 --- The seat's shot as its clock runs out, or nil when nothing it has fits.
 function controls.shot(state: sim.State, seat: Seat): sim.Shot
    if seat.kind == "bot" then return bots.refresh(state, seat.player, seat.plan, seat.brain) end
-   local aim = seat.aim
-   if not aim or not aim.pick then return nil end
-   return { player = seat.player, slot = aim.slot, heading = heading(seat), cells = aim.cells }
+   if not seat.aim then return nil end
+   return sim.settle(state, seat.player, controls.intent(seat.aim)).shot
 end
 
 --- The seat's shot fired (`r` is what came of it): bots plan their next,
@@ -256,8 +199,8 @@ end
 function controls.fired(state: sim.State, seat: Seat, r: sim.LockResult)
    if seat.kind == "bot" then
       seat.plan = state.players[seat.player].alive and bots.choose(state, seat.player, seat.brain) or nil
-   elseif r.fired and seat.aim.want then
-      seat.aim.want, seat.aim.count = centre(state.board, r.fired.cells), #r.fired.cells
+   elseif r.fired and seat.aim and seat.aim.want then
+      seat.aim.want, seat.aim.count = sim.centre(state.board, r.fired.cells), #r.fired.cells
    end
 end
 
@@ -271,6 +214,9 @@ function controls.act(state: sim.State, seat: Seat, action: Action): boolean
       local n = math.floor(tonumber(slot))
       if n > #state.players[seat.player].bank then return false end
       aim.slot = n
+   elseif action == "slot_prev" or action == "slot_next" then
+      local n = #state.players[seat.player].bank
+      aim.slot = (aim.slot - 1 + (action == "slot_next" and 1 or n - 1)) % n + 1
    elseif action == "turn_ccw" then
       aim.turn = (aim.turn + 1) % 6
    elseif action == "turn_cw" then
@@ -293,8 +239,7 @@ function controls.act(state: sim.State, seat: Seat, action: Action): boolean
 end
 
 local KEYS <const>: {string: Action} = {
-   ["1"] = "slot1", ["2"] = "slot2", ["3"] = "slot3",
-   kp1 = "slot1", kp2 = "slot2", kp3 = "slot3",
+   z = "slot_prev", c = "slot_next",
    q = "turn_ccw", e = "turn_cw",
    left = "left", a = "left", right = "right", d = "right",
    up = "heading_next", tab = "heading_next", down = "heading_prev",
@@ -302,8 +247,7 @@ local KEYS <const>: {string: Action} = {
 }
 
 local BUTTONS <const>: {string: Action} = {
-   x = "slot1", y = "slot2", b = "slot3",
-   leftshoulder = "turn_ccw", rightshoulder = "turn_cw",
+   leftshoulder = "slot_prev", rightshoulder = "slot_next",
    dpleft = "left", dpright = "right",
    dpup = "heading_next", dpdown = "heading_prev",
    a = "fire", start = "join", back = "leave",
@@ -442,15 +386,12 @@ function controls.dial_actions(seat: Seat, axis: string, value: number): {Action
    return out
 end
 
---- A push of the left stick starts out placing the chunk if it first points
---- within `HOME` degrees either side of the player's corner, the half of the
---- stick facing their home, and aiming if it points anywhere across the board
---- from there. Placing reaches `REACH` degrees round, so the home gets two
---- thirds of the stick, and sweeping on past that turns the push to aiming.
---- Aiming, straight across is within `ACROSS` degrees of dead ahead, and the
---- side headings either side of that.
+--- The left stick places the chunk while it points within `HOME` degrees
+--- either side of the player's corner, the half of the stick facing their
+--- home, and aims while it points across the board, the other half. Aiming,
+--- straight across is within `ACROSS` degrees of dead ahead, and the side
+--- headings either side of that.
 local HOME <const> = 90
-local REACH <const> = 120
 local ACROSS <const> = 30
 
 --- Which way player `p`'s corner points as drawn, in degrees clockwise from
@@ -460,14 +401,14 @@ local function corner_angle(p: integer): number
    return 60 * board.PLAYERS[p].corner - 30
 end
 
---- What a left-stick movement asks for: "flick" when it is let go after
---- aiming, else nil. A push that starts out towards the home places the
---- chunk: its angle sets where along the back wall, one end to the other as
---- it goes round. A push that starts out across the board (or sweeps round
---- past the home's ends) aims: it picks the heading it points at, and only
---- letting go ends it, so it never moves the chunk, wherever it wanders.
---- Letting go after aiming is the flick. Let go, the chunk stays where it
---- was placed; easing the stick between the two thresholds changes nothing.
+--- What a left-stick movement asks for: "flick" when it is let go while
+--- aiming, else nil. Pushed out towards the home, its angle places the
+--- chunk along the back wall, one end to the other as it goes round.
+--- Pushed out across the board, it aims, picking the heading it points at
+--- and leaving the chunk where it is. Whichever half it is in decides, so
+--- swinging back towards the home places again. Letting go after aiming is
+--- the flick. Let go, the chunk stays where it was placed; easing the stick
+--- between the two thresholds changes nothing.
 function controls.flick_action(state: sim.State, seat: Seat, axis: string, value: number): Action
    local f = seat.flick
    if not f then return nil end
@@ -477,22 +418,18 @@ function controls.flick_action(state: sim.State, seat: Seat, axis: string, value
    local r = math.sqrt(f.x * f.x + f.y * f.y)
    if r < REST then
       local flicked = f.aiming
-      f.aiming, f.placing, f.heading, aim.along = false, false, nil, nil
+      f.aiming, aim.along = false, nil
       return flicked and aim.pick and "flick" or nil
    end
    if r < PUSH then return nil end
    local off = (angle(f.x, f.y) - corner_angle(seat.player) + 180) % 360 - 180
-   if not f.aiming and not f.placing then
-      if math.abs(off) <= HOME then f.placing = true else f.aiming = true end
-   end
-   if f.placing and math.abs(off) > REACH then f.placing, f.aiming = false, true end
-   if f.placing then
+   f.aiming = math.abs(off) > HOME
+   if not f.aiming then
       -- Clockwise from the corner as seen is the back wall's start.
-      aim.along = (REACH - off) / (2 * REACH)
+      aim.along = (HOME - off) / (2 * HOME)
       if #aim.spots > 0 and aim.pick ~= along_pick(aim.along, #aim.spots) then refresh_aim(state, seat) end
-   elseif math.abs(off) > HOME then
+   else
       local n = math.abs(off) >= 180 - ACROSS and 2 or off > 0 and 1 or 3
-      f.heading = n
       if aim.prefer ~= n then
          aim.prefer = n
          refresh_aim(state, seat)
@@ -501,25 +438,32 @@ function controls.flick_action(state: sim.State, seat: Seat, axis: string, value
    return nil
 end
 
+--- A seat played elsewhere in a networked match, by `name` ("bot" for one
+--- of the server's bots). It has no aim here: nobody else's aim is known.
+function controls.remote(p: integer, name: string): Seat
+   return { player = p, kind = "remote", name = name }
+end
+
 --- What to call the seat's controller on screen.
 function controls.label(seat: Seat): string
    if seat.kind == "keys" then return "keyboard" end
    if seat.kind == "pad" then return "controller" end
+   if seat.kind == "remote" then return seat.name or "bot" end
    return "bot"
 end
 
---- What picks each bank slot, for the panels.
-function controls.slot_keys(kind: controls.Kind): {string}
-   if kind == "keys" then return { "1", "2", "3" } end
-   if kind == "pad" then return { "X", "Y", "B" } end
+--- What takes the queued chunk on the left and on the right, for the queue.
+function controls.queue_keys(kind: controls.Kind): {string}
+   if kind == "keys" then return { "Z", "C" } end
+   if kind == "pad" then return { "LB", "RB" } end
    return nil
 end
 
---- The on-screen legend for a kind of controller, as { key, what it does }.
-function controls.legend(kind: controls.Kind): {{string, string}}
+--- The legend for a match played on this machine.
+local function legend_here(kind: controls.Kind): {{string, string}}
    if kind == "keys" then
       return {
-         { "1 2 3", "pick chunk" },
+         { "Z / C", "take the left / right chunk" },
          { "Q / E", "rotate" },
          { "Left Right / A D", "slide" },
          { "Up Down / Tab", "heading" },
@@ -527,8 +471,8 @@ function controls.legend(kind: controls.Kind): {{string, string}}
       }
    elseif kind == "pad" then
       return {
-         { "X Y B", "pick chunk" },
-         { "LB / RB / right stick", "rotate" },
+         { "LB / RB", "take the left / right chunk" },
+         { "right stick", "rotate" },
          { "left stick", "point to place, flick to fire" },
          { "D-pad", "slide, heading" },
          { "A", "fire now" },
@@ -536,6 +480,18 @@ function controls.legend(kind: controls.Kind): {{string, string}}
       }
    end
    return nil
+end
+
+--- The on-screen legend for a kind of controller, as { key, what it does }.
+--- In a networked match (`vote`) firing now is a vote: see README.
+function controls.legend(kind: controls.Kind, vote?: boolean): {{string, string}}
+   local list = legend_here(kind)
+   if vote and list then
+      for _, pair in ipairs(list) do
+         if pair[2] == "fire now" then pair[2] = "ready (fires once all are)" end
+      end
+   end
+   return list
 end
 
 return controls

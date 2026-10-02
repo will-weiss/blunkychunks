@@ -36,11 +36,22 @@ local record draw
       keys: {{string, string}}
    end
 
-   --- Who is at a player's panel: `label` names their controller, and
-   --- `slots`, for a human, what picks each bank slot.
+   --- Who is at a player's panel: `label` names their controller. In a
+   --- networked match `remote` seats are played elsewhere, so their aim is
+   --- unknown here, and `ready` is a player's vote to fire now.
    record Seat
       label: string
-      slots: {string}
+      remote: boolean
+      ready: boolean
+   end
+
+   --- A human's queue: the bank chunks either side of the one in use, as
+   --- they'd sit on the board, and what takes each.
+   record Queue
+      player: integer
+      left: {bc.Cell}
+      right: {bc.Cell}
+      keys: {string}
    end
 
    --- What a player is aiming this shot clock, for the panels.
@@ -360,26 +371,6 @@ function draw.arrow(v: View, cells: {Tri}, heading: integer, owner: string, alph
    leave()
 end
 
---- A bank chunk (Eisenstein cells) drawn small, centred at (x, y).
-function draw.thumb(cells: {bc.Cell}, x: number, y: number, side: number, alpha: number)
-   local cx, cy = 0.0, 0.0
-   for _, c in ipairs(cells) do
-      local p = bc.centroid(c.a, c.b, side)
-      cx, cy = cx + p.x, cy + p.y
-   end
-   cx, cy = cx / #cells, cy / #cells
-   for _, c in ipairs(cells) do
-      local pts = bc.cell_corners(c.a, c.b, side)
-      color(bc.FILL[c.color], alpha)
-      love.graphics.polygon("fill", x - cx + pts[1].x, y - cy + pts[1].y, x - cx + pts[2].x, y - cy + pts[2].y,
-         x - cx + pts[3].x, y - cy + pts[3].y)
-      love.graphics.setColor(1, 1, 1, alpha)
-      love.graphics.setLineWidth(1)
-      love.graphics.polygon("line", x - cx + pts[1].x, y - cy + pts[1].y, x - cx + pts[2].x, y - cy + pts[2].y,
-         x - cx + pts[3].x, y - cy + pts[3].y)
-   end
-end
-
 local LOOK_NOTE <const>: {sim.Look: string} = {
    clear = "lands clear",
    home = "lands in your own home",
@@ -391,18 +382,18 @@ local OUT_NOTE <const>: {sim.Out: string} = {
    friendly = "out: friendly fire",
 }
 
---- Player panels down the right-hand side: name, shot clock or status, bank
---- and aim. `aims` holds what each player is aiming (bots and human alike),
---- `clocks` the seconds left on each one's shot clock, `seats` who is
---- playing each one.
+--- Player panels down the right-hand side: name, shot clock or status and
+--- aim. Nobody's bank shows here; a human's own is in their queue. `aims`
+--- holds what each player is aiming (bots and human alike), `clocks` the
+--- seconds left on each one's shot clock, `seats` who is playing each one.
 function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {number}, seats: {draw.Seat},
                      x: number, y: number, w: number, small: love.Font, big: love.Font)
-   local h = 228
+   local h = 92
    for p, pl in ipairs(board.PLAYERS) do
-      local top = y + (p - 1) * (h + 14)
+      local top = y + (p - 1) * (h + 12)
       local me = state.players[p]
       local seat = seats[p]
-      local human = seat and seat.slots ~= nil
+      local human = seat and seat.label ~= "bot"
       color(pl.color, me.alive and 0.10 or 0.04)
       love.graphics.rectangle("fill", x, top, w, h, 8, 8)
       color(pl.color, me.alive and 1 or 0.4)
@@ -422,8 +413,9 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {numbe
          color(INK)
          love.graphics.print(left, x + w - 14 - big:getWidth(left), top + 10)
          love.graphics.setFont(small)
-         color(MUTED)
-         love.graphics.print("shot clock", x + w - 14 - small:getWidth("shot clock"), top + 38)
+         local under = seat and seat.ready and "ready to fire" or "shot clock"
+         color(seat and seat.ready and pl.color or MUTED)
+         love.graphics.print(under, x + w - 14 - small:getWidth(under), top + 38)
       else
          local status = OUT_NOTE[me.out]
          color(DANGER)
@@ -431,89 +423,149 @@ function draw.panels(state: sim.State, aims: {integer: draw.Aim}, clocks: {numbe
       end
 
       local aim = aims[p]
-      local slot_w = (w - 28) / 3
-      for i = 1, #me.bank do
-         local bx, by = x + 14 + (i - 1) * slot_w, top + 62
-         if me.alive and aim and aim.slot == i then
-            color(pl.color, 0.28)
-         else
-            love.graphics.setColor(1, 1, 1, 0.6)
-         end
-         love.graphics.rectangle("fill", bx + 2, by, slot_w - 4, 104, 6, 6)
-         draw.thumb(me.bank[i], bx + slot_w / 2, by + 52, 9, me.alive and 1 or 0.35)
-         if human then
-            color(aim and aim.slot == i and pl.color or MUTED)
-            love.graphics.print(seat.slots[i] or tostring(i), bx + 8, by + 4)
-         end
-      end
-
       if me.alive then
          local note: string
          local hue = MUTED
-         if not aim then
+         if seat and seat.remote then
+            note = "aiming, out of sight"
+         elseif not aim then
             note = "nothing fits"
             hue = DANGER
          elseif not aim.look then
-            note = human and "this chunk doesn't fit like this: rotate or pick another" or "re-aiming"
+            note = human and "this chunk doesn't fit like this: rotate or take another" or "re-aiming"
             hue = human and DANGER or MUTED
          else
             note = ("aiming %s, %s"):format(HEADING_NAMES[aim.heading], LOOK_NOTE[aim.look])
             hue = aim.look == "clear" and INK or aim.look == "home" and AMBER or DANGER
          end
          color(hue)
-         love.graphics.printf(note, x + 14, top + 176, w - 28, "left")
+         love.graphics.printf(note, x + 14, top + 62, w - 28, "left")
       end
    end
 end
 
---- The key legend: each group starts a new line with its title, then key
---- chips with their descriptions, wrapping within `w`. The legend sits on
---- `bottom`, growing upward as it needs more lines.
-function draw.controls(groups: {draw.KeyGroup}, x: number, bottom: number, w: number, font: love.Font)
-   love.graphics.setFont(font)
-   local line_h = font:getHeight() + 10
-   local indent = 0.0
-   for _, group in ipairs(groups) do indent = math.max(indent, font:getWidth(group.title) + 16) end
+--- A queued chunk, turned as the board is drawn, centred in the box at
+--- (x, y), w by h: as large as on the board, unless that won't fit.
+local function queued(v: View, cells: {bc.Cell}, owner: string, x: number, y: number, w: number, h: number)
+   local xmin, xmax, ymin, ymax = math.huge, -math.huge, math.huge, -math.huge
+   for _, c in ipairs(cells) do
+      for _, p in ipairs(bc.cell_corners(c.a, c.b, 1)) do
+         local px, py = turn(p.x, p.y)
+         xmin, xmax = math.min(xmin, px), math.max(xmax, px)
+         ymin, ymax = math.min(ymin, py), math.max(ymax, py)
+      end
+   end
+   local side = math.min(v.side, (w - 24) / (xmax - xmin), (h - 24) / (ymax - ymin))
+   love.graphics.push()
+   love.graphics.translate(x + w / 2 - (xmin + xmax) / 2 * side, y + h / 2 - (ymin + ymax) / 2 * side)
+   love.graphics.rotate(TURN)
+   for _, c in ipairs(cells) do
+      local p = bc.cell_corners(c.a, c.b, side)
+      color(bc.FILL[c.color])
+      love.graphics.polygon("fill", p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y)
+      love.graphics.setColor(PAPER[1], PAPER[2], PAPER[3])
+      love.graphics.setLineWidth(1)
+      love.graphics.polygon("line", p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y)
+   end
+   love.graphics.pop()
+   color(owner)
+   love.graphics.setLineWidth(2)
+   love.graphics.rectangle("line", x, y, w, h, 8, 8)
+end
 
-   -- Lay the chips out first, to know how many lines they take.
-   local record Chip
-      key: string
-      what: string
-      x: number
-      line: integer
+--- Each human's queue along the bottom, `x` to `x + w` and `y` to `y + h`:
+--- the chunk they'd take on the left and the one on the right, each in a box
+--- with the key that takes it. The chunk in use is on the board, not here.
+function draw.queues(v: View, queues: {draw.Queue}, x: number, y: number, w: number, h: number,
+                     font: love.Font)
+   if #queues == 0 then return end
+   love.graphics.setFont(font)
+   local part = w / #queues
+   for k, q in ipairs(queues) do
+      local pl = board.PLAYERS[q.player]
+      local px = x + (k - 1) * part
+      -- The two boxes sit apart, leaving the middle for the player's name.
+      local gap = math.min(part * 0.2, 160)
+      local bw = (part - gap) / 2 - 8
+      local boxes: {{number, {bc.Cell}, string}} = {
+         { px + 4, q.left, q.keys[1] },
+         { px + part - 4 - bw, q.right, q.keys[2] },
+      }
+      for _, b in ipairs(boxes) do
+         color(pl.color, 0.08)
+         love.graphics.rectangle("fill", b[1], y, bw, h, 8, 8)
+         if b[2] then queued(v, b[2], pl.color, b[1], y, bw, h) end
+         color(pl.color)
+         love.graphics.print(b[3], b[1] + 8, y + 6)
+      end
+      color(pl.color)
+      love.graphics.printf(pl.name, px + 4 + bw, y + h / 2 - font:getHeight(), part - 8 - 2 * bw, "center")
+      color(MUTED)
+      love.graphics.printf("queue", px + 4 + bw, y + h / 2, part - 8 - 2 * bw, "center")
+   end
+end
+
+--- Where the key legend's titles and chips go: each group starts a new line
+--- with its title, then key chips with their descriptions, wrapping within
+--- `w`. `stacked` puts each title on a line of its own, above its chips.
+local record Chip
+   key: string
+   what: string
+   x: number
+   line: integer
+end
+
+local function legend_layout(groups: {draw.KeyGroup}, w: number, font: love.Font, stacked: boolean): {Chip}, {integer}, integer
+   local indent = 0.0
+   if not stacked then
+      for _, group in ipairs(groups) do indent = math.max(indent, font:getWidth(group.title) + 16) end
    end
    local chips: {Chip} = {}
    local starts: {integer} = {}
    local line = 0
    for g, group in ipairs(groups) do
-      local cx = x + indent
       starts[g] = line
+      if stacked then line = line + 1 end
+      local cx = indent
       for _, k in ipairs(group.keys) do
          local item = font:getWidth(k[1]) + 12 + 6 + font:getWidth(k[2]) + 18
-         if cx > x + indent and cx + item > x + w then cx, line = x + indent, line + 1 end
+         if cx > indent and cx + item > w then cx, line = indent, line + 1 end
          chips[#chips + 1] = { key = k[1], what = k[2], x = cx, line = line }
          cx = cx + item
       end
       line = line + 1
    end
+   return chips, starts, line
+end
 
-   local top = bottom - line * line_h
+--- The key legend's height, `w` wide (see `draw.controls`).
+function draw.controls_height(groups: {draw.KeyGroup}, w: number, font: love.Font, stacked: boolean): number
+   local _, _, lines = legend_layout(groups, w, font, stacked)
+   return lines * (font:getHeight() + 10)
+end
+
+--- The key legend from (x, top), `w` wide: each group's title, in its
+--- colour, then its key chips.
+function draw.controls(groups: {draw.KeyGroup}, x: number, top: number, w: number, font: love.Font, stacked: boolean)
+   love.graphics.setFont(font)
+   local line_h = font:getHeight() + 10
+   local chips, starts = legend_layout(groups, w, font, stacked)
    for g, group in ipairs(groups) do
       color(group.color or INK)
       love.graphics.print(group.title, x, top + starts[g] * line_h + 3)
    end
    for _, c in ipairs(chips) do
-      local cy = top + c.line * line_h
+      local cx, cy = x + c.x, top + c.line * line_h
       local kw = font:getWidth(c.key) + 12
       color("#ffffff")
-      love.graphics.rectangle("fill", c.x, cy, kw, font:getHeight() + 6, 4, 4)
+      love.graphics.rectangle("fill", cx, cy, kw, font:getHeight() + 6, 4, 4)
       color(GRID)
       love.graphics.setLineWidth(1)
-      love.graphics.rectangle("line", c.x, cy, kw, font:getHeight() + 6, 4, 4)
+      love.graphics.rectangle("line", cx, cy, kw, font:getHeight() + 6, 4, 4)
       color(INK)
-      love.graphics.print(c.key, c.x + 6, cy + 3)
+      love.graphics.print(c.key, cx + 6, cy + 3)
       color(MUTED)
-      love.graphics.print(c.what, c.x + kw + 6, cy + 3)
+      love.graphics.print(c.what, cx + kw + 6, cy + 3)
    end
 end
 

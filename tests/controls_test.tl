@@ -107,6 +107,18 @@ function T.actions_pick_turn_and_head()
    A.eq(controls.act(s, seat, "fire"), false, "fire is the game's")
 end
 
+function T.the_queue_cycles_round_the_bank()
+   local s = fresh()
+   local seat = controls.human(s, 1, "pad")
+   A.truthy(controls.act(s, seat, "slot_next"), "slot_next handled")
+   A.eq(seat.aim.slot, 2, "right takes the next")
+   controls.act(s, seat, "slot_next")
+   controls.act(s, seat, "slot_next")
+   A.eq(seat.aim.slot, 1, "and wraps round")
+   controls.act(s, seat, "slot_prev")
+   A.eq(seat.aim.slot, sim.BANK, "left wraps back")
+end
+
 function T.out_players_ignore_actions()
    local s = fresh()
    local seat = controls.human(s, 1, "keys")
@@ -147,9 +159,8 @@ function T.a_human_aims_the_next_chunk_from_where_the_last_fired()
 end
 
 function T.keys_and_buttons_map_to_the_same_actions()
-   A.eq(controls.key_action("1"), "slot1", "1")
-   A.eq(controls.button_action("x"), "slot1", "X")
-   A.eq(controls.key_action("q"), controls.button_action("leftshoulder"), "rotate")
+   A.eq(controls.key_action("z"), controls.button_action("leftshoulder"), "queue left")
+   A.eq(controls.key_action("c"), controls.button_action("rightshoulder"), "queue right")
    A.eq(controls.key_action("left"), controls.button_action("dpleft"), "slide")
    A.eq(controls.key_action("space"), controls.button_action("a"), "fire")
    A.eq(controls.key_action("r"), nil, "R is the game's")
@@ -242,11 +253,11 @@ function T.the_left_stick_places_the_chunk_round_the_home()
       local aim = seat.aim
       A.truthy(#aim.spots > 2, "room to place")
       A.eq(point(s, seat, 0), nil, "pointing at the home doesn't fire")
-      A.eq(swing(s, seat, 0, 120), nil, "nor does swinging round it")
+      A.eq(swing(s, seat, 0, 90), nil, "nor does swinging round it")
       A.eq(aim.pick, 1, "fully clockwise: the back wall's start")
       local start = drawn_off(s, seat)
       A.truthy(start > 0, "which is clockwise of the corner as drawn")
-      swing(s, seat, 120, -120)
+      swing(s, seat, 90, -90)
       A.eq(aim.pick, #aim.spots, "fully anticlockwise: its end")
       A.truthy(drawn_off(s, seat) < 0, "anticlockwise of the corner")
       point(s, seat, 0)
@@ -278,11 +289,26 @@ function T.once_placed_anywhere_across_the_board_aims()
    A.eq(let_go(s, seat), "flick", "and flicks")
 end
 
+function T.back_towards_the_home_the_stick_places_again()
+   local s = fresh()
+   local seat = controls.human(s, 1, "pad")
+   local aim = seat.aim
+   point(s, seat, 0)
+   local middle = aim.pick
+   let_go(s, seat)
+   point(s, seat, -150)
+   A.eq(aim.pick, middle, "aiming leaves the chunk be")
+   swing(s, seat, -150, -90)
+   A.eq(aim.pick, #aim.spots, "back down at the home's edge: placing, at the wall's end")
+   A.truthy(aim.pick ~= middle, "so it moved")
+   A.eq(let_go(s, seat), nil, "and letting go there isn't a flick")
+end
+
 function T.the_left_stick_follows_its_angle_while_the_chunk_rotates()
    local s = fresh()
    local seat = controls.human(s, 1, "pad")
    point(s, seat, 0)
-   swing(s, seat, 0, 120)
+   swing(s, seat, 0, 90)
    for _ = 1, 6 do
       controls.act(s, seat, "turn_cw")
       if seat.aim.pick then A.eq(seat.aim.pick, 1, "still at the start") end
@@ -305,10 +331,10 @@ function T.a_flick_across_the_board_picks_a_heading_and_fires_when_let_go()
       end
       point(s, seat, 180)
       swing(s, seat, 180, 0)
-      A.eq(aim.pick, spot, "an aiming push never places, wherever it goes")
-      A.eq(let_go(s, seat), "flick", "and letting go still flicks")
+      A.eq(aim.pick, spot, "swung back to the corner: placing again")
+      A.eq(let_go(s, seat), nil, "so letting go there isn't a flick")
       point(s, seat, 0)
-      A.eq(swing(s, seat, 0, 140), nil, "a placing push swung past the home's end")
+      A.eq(swing(s, seat, 0, 140), nil, "a placing push swung across the board")
       A.eq(aim.prefer, 1, "aims from there")
       A.eq(let_go(s, seat), "flick", "and flicks when let go")
       A.eq(controls.flick_action(s, seat, "triggerleft", 1), nil, "triggers do nothing")
@@ -364,9 +390,20 @@ end
 function T.every_controller_has_a_legend()
    for _, kind in ipairs({ "keys", "pad" } as {controls.Kind}) do
       A.truthy(#controls.legend(kind) > 0, kind .. " legend")
-      A.eq(#controls.slot_keys(kind), sim.BANK, kind .. " slot keys")
+      A.eq(#controls.queue_keys(kind), 2, kind .. " queue keys")
    end
    A.eq(controls.legend("bot"), nil, "bots need none")
+end
+
+function T.a_remote_seat_has_no_aim_and_hears_shots_quietly()
+   local s = fresh()
+   local seat = controls.remote(2, "Bo")
+   A.eq(controls.label(seat), "Bo", "named")
+   A.truthy(not controls.is_human(seat), "not one of ours to steer")
+   local shot = sim.settle(s, 2, { slot = 1, turn = 0, prefer = 2 }).shot
+   controls.fired(s, seat, sim.lock_in(s, 2, shot))
+   controls.update(s, seat)
+   A.eq(seat.aim, nil, "still no aim")
 end
 
 return T

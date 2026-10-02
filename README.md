@@ -91,6 +91,18 @@ Everyone's first clock is the full 8 seconds, plus 2⅔ for each player before
 them. Chunks already on the board keep sliding the whole time. When a chunk is
 fired its slot in your bank is refilled with a fresh one.
 
+What fires is the legal shot nearest to what you were aiming: your chunk and
+rotation at the spot along your back wall closest to where you put it, on your
+heading unless that has become friendly fire. So a chunk sliding into your
+spot just as your clock runs out moves your shot over rather than putting you
+out. You are only out of moves when nothing in your bank fits anywhere.
+
+Time is kept in whole milliseconds, and the board's ticks and everyone's
+clocks happen in one fixed order: a clock running out at the same moment as a
+tick goes first, and two at once go lowest player first. Player 2's first
+clock is 10.666 seconds, Player 3's 13.333. The same seed and the same shots
+always make the same match, on any machine and at any frame rate.
+
 ## Sliding
 
 Every tick (0.28 seconds) each chunk takes one step along its heading. A step
@@ -169,6 +181,9 @@ The game is written in Teal and runs in LÖVE 11.4.
 | ----------------------------- | ------------------------------------------------------ |
 | `make run`                    | open the setup screen, then play (`ARGS="--play"` skips it: you as Player 1 against two bots) |
 | `make bots`                   | watch three bots play each other                       |
+| `make host`                   | host a networked match: the setup screen, open for others to join |
+| `make join HOST=10.0.0.2`     | join one (`HOST` defaults to this machine)             |
+| `make server`                 | a headless server for networked matches (no window)    |
 | `make run DIAMETER=12 NOTCH=5` | play on another size of board (also for `bots`, `soak`, `images`) |
 | `make run ARGS="--seed 42"`   | a reproducible match; `--fast` for a 2 second clock, `--size 8` for smaller chunks |
 | `make test`                   | the rules engine's tests                               |
@@ -178,7 +193,7 @@ The game is written in Teal and runs in LÖVE 11.4.
 
 | Key                | Does                                |
 | ------------------ | ----------------------------------- |
-| `1` `2` `3`        | pick a chunk from your bank         |
+| `Z` / `C`          | take the chunk on the left / right of your queue |
 | `Q` / `E`          | rotate counterclockwise / clockwise |
 | `←` `→` or `A` `D` | slide the chunk along your back wall |
 | `↑` `↓` or `Tab`   | change heading                      |
@@ -208,13 +223,17 @@ back wall unless nothing else fits.
 
 Gamepads can play during a match too, as many as there are bots to take over: press `Start`
 on one to take the first bot's home, and `Back` (or unplugging it) hands that
-home back to a bot. The legend at the bottom of the screen lists the keys and
-buttons for every controller in play.
+home back to a bot. The legend at the top right of the screen lists the keys
+and buttons for every controller in play.
+
+Your queue sits under the board: the chunk you're aiming is on the board, and
+the other two in your bank are shown either side of it, full size and turned
+as you have it. Taking the left or right one puts the one you were aiming on
+the other side, so the three cycle round. Nobody else's bank is shown.
 
 | Button               | Does                                 |
 | -------------------- | ------------------------------------ |
-| `X` `Y` `B`          | pick a chunk from your bank          |
-| `LB` / `RB`          | rotate counterclockwise / clockwise  |
+| `LB` / `RB`          | take the chunk on the left / right of your queue |
 | right stick, round   | rotate the way you turn it           |
 | left stick at your home | place the chunk there             |
 | left stick flicked across | pick a heading, and fire (see below) |
@@ -223,20 +242,19 @@ buttons for every controller in play.
 | `A`                  | fire now                             |
 | `Start` / `Back`     | join / leave                         |
 
-Holding a slide or a rotate, on the keyboard or a gamepad, keeps it going.
+Holding a slide (on the keyboard or the D-pad), or `Q` / `E`, keeps it going.
 
 The left stick places and fires. It is read as the board is drawn, so for
 Player 1 down is towards their home and up is across the board; for the
-others it's turned round to their corner. What a push does depends on where
-it first goes. Push it into the half facing your home (within 90° of your
-corner) and it places: its angle sets where the chunk sits along your back
-wall, and you can swing it on round up to 120° either side, two thirds of
-the stick, to reach the far ends of your V. Let go and the chunk stays where
-you put it. Push it into the half facing across the board and it aims: within
-30° of straight across picks straight across, and further round either side
-picks the side heading that way. An aiming push never moves the chunk,
-wherever the stick wanders, and swinging a placing push on past 120° turns it
-into one. Letting the stick go back to the middle after aiming is the
+others it's turned round to their corner. Whichever half of the stick it
+points into decides what it does. In the half facing your home (within 90°
+of your corner) it places: its angle sets where the chunk sits along your
+back wall, one end of your V at one edge of that half and the other end at
+the other. Let go and the chunk stays where you put it. In the half facing
+across the board it aims and leaves the chunk be: within 30° of straight
+across picks straight across, and further round either side picks the side
+heading that way. Swing back into your home's half and you are placing
+again. Letting the stick go back to the middle while aiming is the
 **flick**. On the setup screen, *Controller flick* says what it does: it
 either fires at once, as `A` does, or just sets the heading and waits for
 your shot clock. The right stick can rotate the chunk the whole time. A
@@ -249,6 +267,46 @@ rotation, and after that it snaps to the nearest 60° (89° is one rotation,
 91° is two). Turning back undoes them, though only 3° past each mark, so a
 stick resting on one doesn't flicker. Letting the stick go drops the
 anchor.
+
+## Playing over a network
+
+Up to three people on different machines can play one match. Pick
+**Play: host for others to join** on the setup screen (or `make host`) and it
+shows an address like `192.168.1.20:47419`. Everyone else picks
+**Play: join someone's match**, types that address in and joins. Each newcomer
+takes the first home a bot has, and the host's screen shows them by name. The
+host sets the options and the bots and starts the match. On the lobby screen a
+joiner can move to another free home (`Enter`, or `A` on a gamepad), give it
+back (`Backspace`, or `B`) or just watch. Several controllers on one machine
+can each take a home.
+
+Every machine plays its own copy of the match. The only things sent are the
+shots, each one as its player's shot clock runs out. Until then nobody else
+knows what you're aiming, not even which chunk. Bots run on the host, so
+their aims are as hidden as anyone's.
+
+A few things work differently from a match on one machine:
+
+- **Firing now is a vote.** `Space`, `Enter`, `A` (and a flick, if
+  *Controller flick* fires at once) mark you **ready**. You can keep changing
+  your aim, and pressing again takes the vote back. Once every player still in
+  is ready, the clocks skip ahead to the soonest of their clocks, firing any
+  bot due before it. Bots never hold up the vote.
+- **The host runs the match.** Only the host can change the slide speed
+  (`+` / `-`), start another match (`R`), or take everyone back to the lobby
+  (`Esc`). Anyone else's `Esc` leaves.
+- **Your shot clock runs out a moment before your board catches up.** Each
+  copy runs slightly behind the host, about half the round trip plus 60 ms,
+  so every shot has arrived before it's needed. Your clock is shown against
+  the host's, so what you see is when your shot really goes.
+- **Leaving hands your home to a bot**, and anyone can join a match under way
+  and take a bot's home. A late joiner first catches up from the shots so far.
+
+`make server` runs a server with no game of its own, for a machine everyone
+can reach. Its options come from the command line (`DIAMETER`, `NOTCH`,
+`ARGS="--size 8 --clock 6 --port 47419"`), and the first to join runs it from
+the lobby screen. The game uses UDP port 47419 (`--port` changes it). Across
+the internet, the host needs that port forwarded to their machine.
 
 ## Ideas
 
