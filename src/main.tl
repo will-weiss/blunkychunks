@@ -62,6 +62,7 @@ local shot_seconds = SHOT_SECONDS
 local keyboard = true -- whether the keyboard starts out playing Player 1
 local board_n, board_r = 11, 8
 local chunk_size = 14
+local flick_fires = true -- whether a gamepad's flick fires at once, or waits for the clock
 
 local function effect(g: Game, i: integer, text: string, hex: string, life: number)
    local B = g.state.board
@@ -196,7 +197,7 @@ function love.load(args: {string})
    if flag(args, "--bots") or flag(args, "--play") then
       game = new_game(next_seed)
    else
-      menu = setup.new(board_n, board_r, chunk_size, shot_seconds, { { kind = "keys" } })
+      menu = setup.new(board_n, board_r, chunk_size, shot_seconds, flick_fires, { { kind = "keys" } })
    end
    shot_path = flag(args, "--shot")
    shot_after = tonumber(flag(args, "--after") or "") or 3.0
@@ -204,21 +205,22 @@ end
 
 --- Back to the setup screen, with the options and seats of the last match.
 local function open_setup()
-   menu = setup.new(board_n, board_r, chunk_size, shot_seconds, game and picks_of(game.seats))
+   menu = setup.new(board_n, board_r, chunk_size, shot_seconds, flick_fires, game and picks_of(game.seats))
    menu_pads = {}
 end
 
 --- Start a match as the setup screen has it.
 local function start_match()
-   board_n, board_r, chunk_size, shot_seconds = setup.options(menu)
+   board_n, board_r, chunk_size, shot_seconds, flick_fires = setup.options(menu)
    game = new_game(next_seed, menu.picks)
    menu = nil
 end
 
---- `action` from `seat`'s controller: aim, or fire now.
+--- `action` from `seat`'s controller: aim, or fire now (a flick too, if
+--- the setup screen said so).
 local function seat_action(g: Game, seat: controls.Seat, action: controls.Action)
    if g.over then return end
-   if action == "fire" then
+   if action == "fire" or (action == "flick" and flick_fires) then
       skip_ahead(g, seat.player)
    else
       controls.act(g.state, seat, action)
@@ -574,7 +576,7 @@ function love.gamepadaxis(pad: love.Joystick, axis: string, value: number)
    local seat = seat_of(game, "pad", pad)
    if not seat then return end
    for _, turn in ipairs(controls.dial_actions(seat, axis, value)) do seat_action(game, seat, turn) end
-   local action = controls.axis_action(seat, axis, value)
+   local action = controls.flick_action(game.state, seat, axis, value)
    if action then seat_action(game, seat, action) end
 end
 

@@ -22,8 +22,9 @@ wins.
 The board starts as a hexagon of side 19 with three of its corners notched out.
 What is left is a central hexagon of side 11 (the middle, 22 triangles across)
 with three homes wrapped around alternate corners of it. Each home is a V
-outside two of the middle's walls. Player 1 has the southwest home, and Player
-2 (northwest) and Player 3 (east) follow clockwise.
+outside two of the middle's walls. Player 1 has the south home, its corner
+pointing straight down, and Player 2 (northwest) and Player 3 (northeast)
+follow clockwise.
 
 - Your **dashed line** is the two dashed edges between your home and the
   middle.
@@ -65,13 +66,18 @@ A spot must lie wholly inside your home, must not overlap any triangle already
 there, and must touch your back wall: at least one triangle of the chunk has a
 corner on it.
 
-Your three headings point back across the board from your corner. East fires
-southwest, west or northwest; southwest fires northwest, northeast or east;
-northwest fires east, southeast or southwest. Straight across (west, for east)
-gets out of your home from anywhere in it. Each of the other two runs parallel
-to one of your dashed walls, so it only gets out from the far arm of your V.
-Fired from the arm it runs along, a chunk slides down that arm into the notch
-edge at its end, which is your own back wall.
+Your three headings point back across the board from your corner. South fires
+northwest, north or northeast; northwest fires northeast, southeast or south;
+northeast fires south, southwest or northwest. Straight across (north, for
+south) gets out of your home from anywhere in it. Each of the other two runs
+parallel to one of your dashed walls, so it only gets out from the far arm of
+your V. Fired from the arm it runs along, a chunk slides down that arm into the
+notch edge at its end, which is your own back wall.
+
+You can't aim friendly fire: changing heading skips any heading that would
+run the chunk into your own back wall from where it is, and if a slide,
+rotation or new chunk makes the heading you chose friendly, your aim falls
+back to straight across until it's safe again, then returns to your choice.
 
 ![An aim for each player and where it would land](images/shots.svg)
 
@@ -136,7 +142,8 @@ Its outline's colour says what will happen:
   home fills up.
 - **Red:** friendly fire. Some triangle of the chunk can never leave your home
   on this heading, so if nothing stops it for good it will hit your back wall.
-  The aimed chunk is greyed out.
+  The aimed chunk is greyed out. Your own aim never shows this (see Aiming),
+  but a bot with nothing else that fits may fire one.
 
 ## Losing and winning
 
@@ -182,7 +189,8 @@ The game is written in Teal and runs in LÖVE 11.4.
 
 A match starts from the setup screen: pick the board's diameter and personal
 area (the notch), the chunk size and shot clock, each a step of one (the
-diameter, always even, steps by two), and who plays each home. Every controller shares one cursor: `↑` `↓`
+diameter, always even, steps by two), whether a controller's flick fires at
+once or waits for the shot clock, and who plays each home. Every controller shares one cursor: `↑` `↓`
 choose a row, `←` `→` change it (on a player's row, cycling between the two
 kinds of bot, the keyboard and each plugged-in gamepad), and `Enter` starts the match (`Esc`
 quits). Any gamepad drives the same cursor with its D-pad or stick, seated or
@@ -208,12 +216,30 @@ buttons for every controller in play.
 | `X` `Y` `B`          | pick a chunk from your bank          |
 | `LB` / `RB`          | rotate counterclockwise / clockwise  |
 | right stick, round   | rotate the way you turn it           |
-| D-pad or stick ← →   | slide the chunk along your back wall |
-| D-pad or stick ↑ ↓   | change heading                       |
+| left stick at your home | place the chunk there             |
+| left stick flicked across | pick a heading, and fire (see below) |
+| D-pad ← →            | slide the chunk along your back wall |
+| D-pad ↑ ↓            | change heading                       |
 | `A`                  | fire now                             |
 | `Start` / `Back`     | join / leave                         |
 
 Holding a slide or a rotate, on the keyboard or a gamepad, keeps it going.
+
+The left stick places and fires. It is read as the board is drawn, so for
+Player 1 down is towards their home and up is across the board; for the
+others it's turned round to their corner. The two thirds of the stick facing
+your home (120° either side of your corner) are your home: push the stick
+there and its angle places the chunk along your back wall, from one end of
+your V at one edge of that range to the other end at the other. Let go and
+the chunk stays where you put it. The third facing across the board is your
+headings: point within 20° of straight across for straight across, and
+further round either side for the side heading that way. Pointing there
+picks the heading, and letting the stick go back to the middle from there
+is the **flick**. On the setup screen, *Controller flick* says what it does:
+it either fires at once, as `A` does, or just sets the heading and waits for
+your shot clock. The right stick can rotate the chunk the whole time. A
+flick at a heading that would be friendly fire from where the chunk is falls
+back to straight across, as changing heading does.
 
 The right stick is a dial. Push it out anywhere and that's the anchor; turn it
 round from there and the chunk rotates the same way. The first 10° gives one

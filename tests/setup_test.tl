@@ -8,23 +8,24 @@ local pad1 = {} as love.Joystick
 local pad2 = {} as love.Joystick
 
 local function fresh(): setup.State
-   return setup.new(11, 8, 14, 8, { { kind = "keys" } })
+   return setup.new(11, 8, 14, 8, true, { { kind = "keys" } })
 end
 
 function T.it_starts_from_the_given_options_and_seats()
    local s = fresh()
-   local n, r, chunk, clock = setup.options(s)
+   local n, r, chunk, clock, flick = setup.options(s)
    A.eq(n, 11, "n")
    A.eq(r, 8, "r")
    A.eq(chunk, 14, "chunk")
    A.eq(clock, 8, "clock")
+   A.eq(flick, true, "flick fires")
    A.eq(s.picks[1].kind, "keys", "keyboard on Player 1")
    A.eq(s.picks[2].kind, "bot", "a bot on Player 2")
    A.truthy(setup.on_start(s), "cursor on Start")
 end
 
 function T.with_no_picks_every_home_is_a_bot()
-   local s = setup.new(7, 3, 14, 3)
+   local s = setup.new(7, 3, 14, 3, true)
    A.eq(s.picks[1].kind, "bot", "all bots without picks")
 end
 
@@ -41,6 +42,17 @@ function T.each_option_steps_by_one()
    A.eq(clock, 9, "clock")
    A.eq(setup.lines(s, {})[1].value, "24", "diameter is twice the side")
    A.eq(setup.lines(s, {})[2].value, "9", "personal area")
+end
+
+function T.the_flick_row_toggles_whether_a_flick_fires()
+   local s = fresh()
+   s.cursor = 5
+   A.eq(setup.lines(s, {})[5].value, "fires at once", "fires by default here")
+   setup.change(s, 1, {})
+   A.eq(select(5, setup.options(s)), false, "waits for the clock")
+   A.eq(setup.lines(s, {})[5].value, "waits for the clock", "and says so")
+   setup.change(s, -1, {})
+   A.eq(s.flick, true, "either way toggles")
 end
 
 function T.options_change_and_stop_at_their_ends()
@@ -76,11 +88,11 @@ end
 
 function T.cycling_a_row_moves_a_controller_rather_than_copying_it()
    local s = fresh()
-   s.cursor = 6 -- Player 2
+   s.cursor = 7 -- Player 2
    setup.change(s, 1, { pad1 }) -- bot -> greedyclear bot
    A.eq(s.picks[2].kind, "bot", "still a bot")
    A.eq(s.picks[2].brain, "greedyclear", "a greedyclear one")
-   A.eq(setup.lines(s, { pad1 })[6].value, "Greedyclear bot", "and says so")
+   A.eq(setup.lines(s, { pad1 })[7].value, "Greedyclear bot", "and says so")
    setup.change(s, 1, { pad1 }) -- greedyclear bot -> keyboard
    A.eq(s.picks[2].kind, "keys", "keyboard on Player 2")
    A.eq(s.picks[1].kind, "bot", "and off Player 1")
@@ -92,7 +104,7 @@ function T.cycling_a_row_moves_a_controller_rather_than_copying_it()
    A.eq(s.picks[2].pad, pad1, "and back")
    setup.change(s, 1, { pad1 })
    A.eq(s.picks[2].brain, "random", "a plain bot again")
-   A.eq(setup.lines(s, { pad1 })[6].value, "Bot", "called Bot")
+   A.eq(setup.lines(s, { pad1 })[7].value, "Bot", "called Bot")
 end
 
 function T.a_press_selects_the_row_under_the_cursor()
@@ -100,11 +112,11 @@ function T.a_press_selects_the_row_under_the_cursor()
    s.cursor = 1
    A.eq(setup.press(s, pad1, { pad1 }), false, "an option doesn't start")
    A.eq(s.n, 12, "steps the board on")
-   s.cursor = 6
+   s.cursor = 7
    A.eq(setup.press(s, pad1, { pad1 }), false, "a player's row doesn't start")
    A.eq(s.picks[2].pad, pad1, "sits the pad at Player 2")
    A.eq(s.picks[1].kind, "keys", "keyboard stays on Player 1")
-   s.cursor = 8
+   s.cursor = 9
    A.truthy(setup.press(s, pad2, { pad1, pad2 }), "Start starts, seated or not")
 end
 
@@ -112,12 +124,12 @@ function T.lines_name_every_row()
    local s = fresh()
    setup.join(s, pad1)
    local lines = setup.lines(s, { pad1 })
-   A.eq(#lines, 8, "four options, three players, start")
+   A.eq(#lines, 9, "five options, three players, start")
    A.eq(lines[1].value, "22", "diameter")
    A.eq(lines[2].value, "8", "personal area")
-   A.eq(lines[5].value, "Keyboard", "Player 1")
-   A.eq(lines[6].value, "Controller 1", "Player 2")
-   A.eq(lines[7].value, "Bot", "Player 3")
+   A.eq(lines[6].value, "Keyboard", "Player 1")
+   A.eq(lines[7].value, "Controller 1", "Player 2")
+   A.eq(lines[8].value, "Bot", "Player 3")
 end
 
 return T

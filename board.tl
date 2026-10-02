@@ -10,9 +10,15 @@
 --- walls that meet there), which leaves three homes, each a V wrapped round
 --- one of the central hexagon's corners 0, 2 and 4:
 ---
----   Player 1  southwest  corner 2, past walls 1 and 2
----   Player 2  northwest  corner 4, past walls 3 and 4
----   Player 3  east       corner 0, past walls 5 and 0
+---   Player 1  south      corner 2, past walls 1 and 2   (southwest)
+---   Player 2  northwest  corner 4, past walls 3 and 4   (northwest)
+---   Player 3  northeast  corner 0, past walls 5 and 0   (east)
+---
+--- The compass names are as the game draws the board: draw.tl turns board
+--- space a twelfth of a turn anticlockwise, so Player 1's corner points
+--- straight down. The bracketed names, like every other compass word in this
+--- file (the heading names, "southwest corner", "right-hand vertex"), are
+--- board space as it is laid out here and by layouts.tl, before that turn.
 ---
 --- A home's dashed line is the two central walls it lies past. Its back wall is
 --- the rest of its outline, which is the edge of the board. Each home holds
@@ -138,7 +144,8 @@ board.MIDDLE = 0
 local WALL <const> = board.WALL
 local MIDDLE <const> = board.MIDDLE
 
---- Player 1 holds the southwest home; 2 and 3 follow clockwise.
+--- Player 1 holds the south home (southwest in board space); 2 and 3 follow
+--- clockwise.
 board.PLAYERS = {
    { name = "Player 1", color = bc.FILL.red, corner = 2 },
    { name = "Player 2", color = bc.FILL.blue, corner = 4 },
@@ -159,7 +166,8 @@ board.STEPS = {
 --- their corner c: 60c + 120, 60c + 180 and 60c + 240 degrees. The middle one
 --- runs straight across, and gets out from anywhere in the home. The other two
 --- each run parallel to one of the home's dashed walls, so they only get out
---- from the home's other arm. East fires SW, W or NW.
+--- from the home's other arm. In board space east fires SW, W or NW; as drawn,
+--- that is Player 3 in the northeast firing S, SW or NW.
 board.HEADINGS = {}
 for p, pl in ipairs(board.PLAYERS) do
    local c = pl.corner

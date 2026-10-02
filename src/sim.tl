@@ -454,6 +454,24 @@ function sim.can_head(p: integer, h: integer): boolean
    return false
 end
 
+--- Whether `cells`, fired by `p` on `heading`, would be friendly fire: some
+--- triangle can never leave p's home that way, and runs into its back wall
+--- unless something stops it for good first. Pure geometry, so it holds
+--- whatever is in the way.
+function sim.friendly(state: State, p: integer, cells: {Tri}, heading: integer): boolean
+   local B = state.board
+   local kind = B.kind
+   local step, pass = B.step[heading], B.pass[heading]
+   for _, c in ipairs(cells) do
+      local i = c.i
+      while kind[i] == p do
+         if kind[i + pass[board.facing(i)]] == WALL or kind[i + step] == WALL then return true end
+         i = i + step
+      end
+   end
+   return false
+end
+
 --- Where `cells`, fired by `p` on `heading`, would come to rest, played out
 --- against the board as it stands: chunks at rest stay put, and chunks in
 --- flight (and the other players' aims, which aren't on the board yet) are
@@ -471,18 +489,7 @@ function sim.ghost(state: State, p: integer, cells: {Tri}, heading: integer): si
    local kind, near, occ, paint, by_id = B.kind, B.near, state.occ, state.paint, state.by_id
    local step, pass = B.step[heading], B.pass[heading]
 
-   local friendly = false
-   for _, c in ipairs(cells) do
-      local i = c.i
-      while kind[i] == p do
-         if kind[i + pass[board.facing(i)]] == WALL or kind[i + step] == WALL then
-            friendly = true
-            break
-         end
-         i = i + step
-      end
-      if friendly then break end
-   end
+   local friendly = sim.friendly(state, p, cells, heading)
 
    -- The board as the ghost sees it: triangles at rest, less those it clears.
    local gone: {integer: boolean} = {}

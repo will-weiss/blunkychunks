@@ -31,6 +31,7 @@ local record controls
       "heading_next"
       "heading_prev"
       "fire"
+      "flick" -- the left stick flicked across the board and let go
       "join"
       "leave"
    end
@@ -41,11 +42,13 @@ local record controls
    record Aim
       slot: integer
       turn: integer -- rotation, 0..5 sixths of a turn counterclockwise
-      heading: integer -- which of the player's three headings, 1..3
+      heading: integer -- which of the player's three headings is in use, 1..3
+      prefer: integer -- the heading last chosen, in use whenever it isn't friendly fire
       want: bc.AB
       count: integer
       spots: {board.Spot} -- legal spots for this chunk and rotation, along the back wall
       pick: integer -- the spot in use, or nil when the chunk fits nowhere
+      along: number -- while the left stick places: how far along the back wall, 0..1
       shape: board.Shape
       cells: {board.Tri} -- the aim's triangles (or where it would be, if it fits nowhere)
       ghost: sim.Ghost
@@ -62,12 +65,21 @@ local record controls
       turns: integer -- rotations applied since the anchor, clockwise positive
    end
 
+   --- The left stick, which both places and fires. `heading` is the heading
+   --- it points at while pushed out across the board, until it's let go.
+   record Flick
+      x: number
+      y: number
+      heading: integer
+   end
+
    record Seat
       player: integer
       kind: Kind
       pad: love.Joystick -- the gamepad, for kind "pad"
       stick: {string: integer} -- per stick axis: -1, 0 or 1, the way it was last pushed
       dial: Dial -- the right stick, turned round to rotate
+      flick: Flick -- the left stick, to place and fire
       held: {Action: number} -- repeating actions held down: seconds to their next repeat
       aim: Aim -- humans
       plan: sim.Shot -- bots: what they will fire
@@ -117,6 +129,32 @@ local function heading(seat: Seat): integer
    return board.HEADINGS[seat.player][seat.aim.heading]
 end
 
+--- Would the aim's cells, fired on heading `n` of the seat's three, be
+--- friendly fire?
+local function friendly(state: sim.State, seat: Seat, n: integer): boolean
+   return sim.friendly(state, seat.player, seat.aim.cells, board.HEADINGS[seat.player][n])
+end
+
+--- Put the aim on its preferred heading, or if that would be friendly fire on
+--- the first of straight across and the other two that isn't. Straight across
+--- gets out from anywhere in the home, so there always is one.
+local function settle_heading(state: sim.State, seat: Seat)
+   local aim = seat.aim
+   aim.heading = aim.prefer
+   if not aim.pick or not friendly(state, seat, aim.prefer) then return end
+   for _, n in ipairs({ 2, 1, 3 }) do
+      if not friendly(state, seat, n) then
+         aim.heading = n
+         return
+      end
+   end
+end
+
+--- The spot of `n` along the back wall that is `along` (0..1) of the way.
+local function along_pick(along: number, n: integer): integer
+   return math.max(1, math.min(n, math.floor(along * (n - 1) + 0.5) + 1))
+end
+
 --- Recompute a human's aim against the board as it is now.
 local function refresh_aim(state: sim.State, seat: Seat)
    local aim, p = seat.aim, seat.player
@@ -126,19 +164,39 @@ local function refresh_aim(state: sim.State, seat: Seat)
    aim.shape = board.shape(B, bc.rotate(chunk, aim.turn))
    aim.spots = along_wall(B, aim.shape, sim.placements(state, p, aim.shape))
    aim.pick = nil
-   local best = math.huge
-   for i, s in ipairs(aim.spots) do
-      local d = aim.want and far(centre(B, board.place(B, aim.shape, s.x, s.y)), #aim.shape.cells, aim.want, aim.count)
-         or math.abs(i - (#aim.spots + 1) / 2)
-      if d < best then best, aim.pick = d, i end
+   if aim.along and #aim.spots > 0 then
+      aim.pick = along_pick(aim.along, #aim.spots)
+   else
+      local best = math.huge
+      for i, s in ipairs(aim.spots) do
+         local d = aim.want and far(centre(B, board.place(B, aim.shape, s.x, s.y)), #aim.shape.cells, aim.want, aim.count)
+            or math.abs(i - (#aim.spots + 1) / 2)
+         if d < best then best, aim.pick = d, i end
+      end
    end
    if aim.pick then
       local s = aim.spots[aim.pick]
       aim.cells = board.place(B, aim.shape, s.x, s.y)
+      settle_heading(state, seat)
       aim.ghost = sim.ghost(state, p, aim.cells, heading(seat))
-      if not aim.want then aim.want, aim.count = centre(B, aim.cells), #aim.cells end
+      if not aim.want or aim.along then aim.want, aim.count = centre(B, aim.cells), #aim.cells end
    else
+      aim.heading = aim.prefer
       aim.ghost = nil
+   end
+end
+
+--- Step the aim's heading `by` (1 or 2, i.e. -1) round its three, past any
+--- that would be friendly fire from where it is, and prefer it from now on.
+local function turn_heading(state: sim.State, seat: Seat, by: integer)
+   local aim = seat.aim
+   local n = aim.heading
+   for _ = 1, 2 do
+      n = (n + by - 1) % 3 + 1
+      if not aim.pick or not friendly(state, seat, n) then
+         aim.prefer = n
+         return
+      end
    end
 end
 
@@ -162,7 +220,7 @@ end
 
 --- A human seat for player `p`, on the keyboard or on gamepad `pad`.
 function controls.human(state: sim.State, p: integer, kind: controls.Kind, pad?: love.Joystick): Seat
-   local seat: Seat = { player = p, kind = kind, pad = pad, stick = {}, dial = { x = 0, y = 0, swept = 0, turns = 0 }, held = {}, aim = { slot = 1, turn = 0, heading = 2 } }
+   local seat: Seat = { player = p, kind = kind, pad = pad, stick = {}, dial = { x = 0, y = 0, swept = 0, turns = 0 }, flick = { x = 0, y = 0 }, held = {}, aim = { slot = 1, turn = 0, heading = 2, prefer = 2 } }
    refresh_aim(state, seat)
    return seat
 end
@@ -221,9 +279,9 @@ function controls.act(state: sim.State, seat: Seat, action: Action): boolean
       if aim.pick then choose_spot(state, seat, math.min(#aim.spots, aim.pick + 1)) end
       return true
    elseif action == "heading_next" then
-      aim.heading = aim.heading % 3 + 1
+      turn_heading(state, seat, 1)
    elseif action == "heading_prev" then
-      aim.heading = (aim.heading + 1) % 3 + 1
+      turn_heading(state, seat, 2)
    else
       return false
    end
@@ -298,7 +356,7 @@ local function stick_action(axis: string, dir: integer): Action
    return dir < 0 and "heading_next" or "heading_prev"
 end
 
---- The action a stick movement asks for, if any: one per push, after which
+--- The action a stick movement asks for, if any, on the setup screen: one per push, after which
 --- holding the stick over repeats it as a held button would (see `repeats`).
 --- `seat.stick` remembers each axis's push.
 function controls.axis_action(seat: Seat, axis: string, value: number): Action
@@ -381,6 +439,58 @@ function controls.dial_actions(seat: Seat, axis: string, value: number): {Action
    return out
 end
 
+--- The left stick points at the player's home within `REACH` degrees either
+--- side of their corner, so the home gets two thirds of the stick, the side
+--- facing it. The rest points across the board, at their headings: straight
+--- across within `ACROSS` degrees of dead ahead, the side ones beyond that.
+local REACH <const> = 120
+local ACROSS <const> = 20
+
+--- Which way player `p`'s corner points as drawn, in degrees clockwise from
+--- east as seen (y down), like the stick's own angle. draw.tl turns board
+--- space a twelfth of a turn anticlockwise, and corner c points at 60c in it.
+local function corner_angle(p: integer): number
+   return 60 * board.PLAYERS[p].corner - 30
+end
+
+--- What a left-stick movement asks for: "flick" when it is let go after
+--- pointing across the board, else nil. Pushed out towards the home, its
+--- angle places the chunk along the back wall, one end to the other as it
+--- goes round. Pushed out across the board, it picks the heading it points
+--- at (the side ones, 60 degrees either side of straight across, take the
+--- outer thirds), and letting go from there is the flick. Let go, the chunk
+--- stays where it was placed; easing it between the two thresholds changes
+--- nothing.
+function controls.flick_action(state: sim.State, seat: Seat, axis: string, value: number): Action
+   local f = seat.flick
+   if not f then return nil end
+   if axis == "leftx" then f.x = value elseif axis == "lefty" then f.y = value else return nil end
+   local aim = seat.aim
+   if not aim or not state.players[seat.player].alive then return nil end
+   local r = math.sqrt(f.x * f.x + f.y * f.y)
+   if r < REST then
+      local flicked = f.heading ~= nil
+      f.heading, aim.along = nil, nil
+      return flicked and aim.pick and "flick" or nil
+   end
+   if r < PUSH then return nil end
+   local off = (angle(f.x, f.y) - corner_angle(seat.player) + 180) % 360 - 180
+   if math.abs(off) <= REACH then
+      -- Clockwise from the corner as seen is the back wall's start.
+      f.heading = nil
+      aim.along = (REACH - off) / (2 * REACH)
+      if #aim.spots > 0 and aim.pick ~= along_pick(aim.along, #aim.spots) then refresh_aim(state, seat) end
+   else
+      local n = math.abs(off) >= 180 - ACROSS and 2 or off > 0 and 1 or 3
+      f.heading = n
+      if aim.prefer ~= n then
+         aim.prefer = n
+         refresh_aim(state, seat)
+      end
+   end
+   return nil
+end
+
 --- What to call the seat's controller on screen.
 function controls.label(seat: Seat): string
    if seat.kind == "keys" then return "keyboard" end
@@ -409,7 +519,8 @@ function controls.legend(kind: controls.Kind): {{string, string}}
       return {
          { "X Y B", "pick chunk" },
          { "LB / RB / right stick", "rotate" },
-         { "D-pad / stick", "slide, heading" },
+         { "left stick", "point to place, flick to fire" },
+         { "D-pad", "slide, heading" },
          { "A", "fire now" },
          { "Back", "leave" },
       }

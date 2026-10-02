@@ -1,5 +1,5 @@
 --- The screen before a match: pick the board's diameter and personal area,
---- the chunk size and shot clock, and
+--- the chunk size and shot clock, whether a gamepad's flick fires, and
 --- who plays each home -- a bot, the keyboard or a gamepad. Every controller
 --- shares one cursor down the rows; on an option row left and right change
 --- it, and on a player's row they cycle who sits there. A gamepad can also
@@ -34,6 +34,7 @@ local record setup
       r: integer -- the notch: each home's personal area
       chunk: integer -- triangles per chunk
       clock: number -- the shot clock, in seconds
+      flick: boolean -- whether a gamepad's flick fires at once, or waits for the clock
       picks: {Pick} -- per player
       cursor: integer -- the row the cursor is on
    end
@@ -62,12 +63,13 @@ setup.MAX_CHUNK = 24
 setup.MIN_CLOCK = 1
 setup.MAX_CLOCK = 30
 
--- Rows: the four options, a row per player, then Start.
+-- Rows: the five options, a row per player, then Start.
 local DIAMETER_ROW <const> = 1
 local AREA_ROW <const> = 2
 local CHUNK_ROW <const> = 3
 local CLOCK_ROW <const> = 4
-local FIRST_PLAYER_ROW <const> = 5
+local FLICK_ROW <const> = 5
+local FIRST_PLAYER_ROW <const> = 6
 
 local function start_row(): integer
    return FIRST_PLAYER_ROW + #board.PLAYERS
@@ -82,9 +84,10 @@ local function find<T>(list: {T}, same: function(T): boolean): integer
 end
 
 --- A setup screen starting from board n-r, `chunk` triangles a chunk, a
---- `clock` second shot clock and `picks` (each player a bot if left out).
-function setup.new(n: integer, r: integer, chunk: integer, clock: number, picks?: {Pick}): State
-   local s: State = { n = n, r = r, chunk = chunk, clock = clock, picks = {}, cursor = start_row() }
+--- `clock` second shot clock, a gamepad's flick firing at once or not
+--- (`flick`) and `picks` (each player a bot if left out).
+function setup.new(n: integer, r: integer, chunk: integer, clock: number, flick: boolean, picks?: {Pick}): State
+   local s: State = { n = n, r = r, chunk = chunk, clock = clock, flick = flick, picks = {}, cursor = start_row() }
    for p = 1, #board.PLAYERS do
       local was = picks and picks[p]
       s.picks[p] = was and { kind = was.kind, pad = was.pad, brain = was.brain } or { kind = "bot" }
@@ -92,10 +95,10 @@ function setup.new(n: integer, r: integer, chunk: integer, clock: number, picks?
    return s
 end
 
---- What the match will be played with: the board's n and r, the chunk size
---- and the shot clock.
-function setup.options(s: State): integer, integer, integer, number
-   return s.n, s.r, s.chunk, s.clock
+--- What the match will be played with: the board's n and r, the chunk size,
+--- the shot clock and whether a gamepad's flick fires at once.
+function setup.options(s: State): integer, integer, integer, number, boolean
+   return s.n, s.r, s.chunk, s.clock, s.flick
 end
 
 --- The player `kind` of controller (and `pad`, for a gamepad) sits at, if any.
@@ -151,6 +154,8 @@ function setup.change(s: State, dx: integer, pads: {love.Joystick})
       s.chunk = math.max(setup.MIN_CHUNK, math.min(setup.MAX_CHUNK, s.chunk + dx))
    elseif row == CLOCK_ROW then
       s.clock = math.max(setup.MIN_CLOCK, math.min(setup.MAX_CLOCK, s.clock + dx))
+   elseif row == FLICK_ROW then
+      s.flick = not s.flick
    elseif row >= FIRST_PLAYER_ROW and row < start_row() then
       local p = row - FIRST_PLAYER_ROW + 1
       local who: {Pick} = {}
@@ -191,12 +196,13 @@ end
 
 --- The screen's rows, top to bottom; the cursor is on row `s.cursor`.
 function setup.lines(s: State, pads: {love.Joystick}): {setup.Line}
-   local n, r, chunk, clock = setup.options(s)
+   local n, r, chunk, clock, flick = setup.options(s)
    local lines: {setup.Line} = {
       { label = "Board diameter", value = ("%d"):format(2 * n) },
       { label = "Personal area", value = ("%d"):format(r) },
       { label = "Chunk size", value = ("%d triangles"):format(chunk) },
       { label = "Shot clock", value = ("%g s"):format(clock) },
+      { label = "Controller flick", value = flick and "fires at once" or "waits for the clock" },
    }
    for p, pl in ipairs(board.PLAYERS) do
       lines[#lines + 1] = { label = pl.name, value = pick_name(s.picks[p], pads), color = pl.color, player = p }

@@ -39,6 +39,55 @@ function T.sliding_moves_along_the_wall_and_stops_at_its_ends()
    A.eq(aim.pick, #aim.spots, "at the other end")
 end
 
+function T.a_human_never_aims_friendly_fire()
+   local s = fresh()
+   for p = 1, 3 do
+      local seat = controls.human(s, p, "keys")
+      local aim = seat.aim
+      for turn = 0, 5 do
+         aim.turn = turn
+         controls.update(s, seat)
+         for i = 1, #aim.spots do
+            while aim.pick < i do controls.act(s, seat, "right") end
+            for _ = 1, 4 do
+               A.eq(sim.friendly(s, p, aim.cells, controls.heading(seat)), false, "not friendly")
+               A.truthy(aim.ghost.look ~= "friendly", "nor its ghost")
+               controls.act(s, seat, "heading_next")
+            end
+         end
+         for _ = 1, #aim.spots do controls.act(s, seat, "left") end
+      end
+   end
+end
+
+function T.a_heading_set_aside_for_friendly_fire_comes_back()
+   local s = fresh()
+   local seat = controls.human(s, 1, "keys")
+   local aim = seat.aim
+   local function bad(n: integer): boolean
+      return sim.friendly(s, 1, aim.cells, board.HEADINGS[1][n])
+   end
+   -- Find a side heading that is fine at one end of the wall but friendly
+   -- somewhere along it.
+   for _ = 1, #aim.spots do controls.act(s, seat, "left") end
+   for _, n in ipairs({ 1, 3 }) do
+      if not bad(n) then
+         while aim.heading ~= n do controls.act(s, seat, "heading_next") end
+         local start = aim.pick
+         while aim.pick < #aim.spots do
+            controls.act(s, seat, "right")
+            if aim.prefer == n and aim.heading ~= n then
+               A.eq(bad(n), true, "set aside only when friendly")
+               while aim.pick > start do controls.act(s, seat, "left") end
+               A.eq(aim.heading, n, "back on it at the start")
+               return
+            end
+         end
+      end
+   end
+   A.truthy(false, "no spot where a side heading is friendly")
+end
+
 function T.actions_pick_turn_and_head()
    local s = fresh()
    local seat = controls.human(s, 2, "pad")
@@ -134,6 +183,105 @@ function T.the_stick_acts_once_per_push_then_repeats_while_held()
    A.eq(controls.axis_action(seat, "leftx", 0.9), "right", "a push right")
    A.eq(controls.axis_action(seat, "lefty", -0.9), "heading_next", "up")
    A.eq(controls.axis_action(seat, "triggerleft", 1.0), nil, "triggers do nothing")
+end
+
+--- Move the left stick to (x, y) in small steps, as a real one moves, and
+--- collect what it asked for.
+local function move(s: sim.State, seat: controls.Seat, x: number, y: number): controls.Action
+   local f = seat.flick
+   local x0, y0 = f.x, f.y
+   local out: controls.Action
+   for i = 1, 20 do
+      out = controls.flick_action(s, seat, "leftx", x0 + (x - x0) * i / 20) or out
+      out = controls.flick_action(s, seat, "lefty", y0 + (y - y0) * i / 20) or out
+   end
+   return out
+end
+
+--- Push player p's left stick out to `r` (from the middle), `off` degrees
+--- clockwise as seen from the way their corner points as drawn.
+local function point(s: sim.State, seat: controls.Seat, off: number, r?: number): controls.Action
+   r = r or 1
+   local t = math.rad(60 * board.PLAYERS[seat.player].corner - 30 + off)
+   move(s, seat, 0, 0)
+   return move(s, seat, r * math.cos(t), r * math.sin(t))
+end
+
+local function let_go(s: sim.State, seat: controls.Seat): controls.Action
+   return move(s, seat, 0, 0)
+end
+
+--- Degrees clockwise as seen from player p's corner to the aim's centroid,
+--- as drawn (a twelfth of a turn anticlockwise from board space).
+local function drawn_off(s: sim.State, seat: controls.Seat): number
+   local x, y = 0.0, 0.0
+   for _, t in ipairs(seat.aim.cells) do
+      local c = board.centroid(s.board.a[t.i], s.board.b[t.i], 1)
+      x, y = x + c.x, y + c.y
+   end
+   local deg = math.deg(math.atan(y / x)) + (x < 0 and 180 or 0) - 30
+   return (deg - (60 * board.PLAYERS[seat.player].corner - 30) + 180) % 360 - 180
+end
+
+function T.the_left_stick_places_the_chunk_round_the_home()
+   local s = fresh()
+   for p = 1, 3 do
+      local seat = controls.human(s, p, "pad")
+      local aim = seat.aim
+      A.truthy(#aim.spots > 2, "room to place")
+      A.eq(point(s, seat, 120), nil, "pointing at the home doesn't fire")
+      A.eq(aim.pick, 1, "fully clockwise: the back wall's start")
+      local start = drawn_off(s, seat)
+      A.truthy(start > 0, "which is clockwise of the corner as drawn")
+      point(s, seat, -120)
+      A.eq(aim.pick, #aim.spots, "fully anticlockwise: its end")
+      A.truthy(drawn_off(s, seat) < 0, "anticlockwise of the corner")
+      point(s, seat, 0)
+      A.eq(aim.pick, (#aim.spots + 1) // 2 + (#aim.spots % 2 == 0 and 1 or 0), "straight at the corner: the middle")
+      local t = math.rad(60 * board.PLAYERS[p].corner - 30)
+      move(s, seat, 0.45 * math.cos(t), 0.45 * math.sin(t))
+      A.eq(aim.pick, (#aim.spots + 1) // 2 + (#aim.spots % 2 == 0 and 1 or 0), "eased off, nothing changes")
+      point(s, seat, 90)
+      local held = aim.pick
+      A.eq(let_go(s, seat), nil, "letting go from the home isn't a flick")
+      A.eq(aim.pick, held, "and the chunk stays put")
+      A.eq(aim.along, nil, "no longer following the stick")
+      A.truthy(sim.legal(s, p, controls.shot(s, seat).cells), "a legal shot")
+   end
+end
+
+function T.the_left_stick_follows_its_angle_while_the_chunk_rotates()
+   local s = fresh()
+   local seat = controls.human(s, 1, "pad")
+   point(s, seat, 120)
+   for _ = 1, 6 do
+      controls.act(s, seat, "turn_cw")
+      if seat.aim.pick then A.eq(seat.aim.pick, 1, "still at the start") end
+   end
+end
+
+function T.a_flick_across_the_board_picks_a_heading_and_fires_when_let_go()
+   local s = fresh()
+   for p = 1, 3 do
+      local seat = controls.human(s, p, "pad")
+      local aim = seat.aim
+      point(s, seat, 0)
+      local spot = aim.pick
+      A.eq(let_go(s, seat), nil, "placed")
+      for _, case in ipairs({ { 180, 2 }, { -165, 2 }, { 165, 2 }, { 140, 1 }, { 125, 1 }, { -140, 3 }, { -125, 3 } }) do
+         A.eq(point(s, seat, case[1]), nil, "pointing across doesn't fire yet")
+         A.eq(aim.prefer, case[2], ("%d degrees picks heading %d"):format(case[1], case[2]))
+         A.eq(let_go(s, seat), "flick", "letting go is the flick")
+         A.eq(aim.pick, spot, "the chunk stayed where it was placed")
+      end
+      point(s, seat, 180)
+      local c = 60 * board.PLAYERS[p].corner - 30
+      for _, off in ipairs({ 120, 0 }) do
+         move(s, seat, math.cos(math.rad(c + off)), math.sin(math.rad(c + off)))
+      end
+      A.eq(let_go(s, seat), nil, "swung round the rim to the home and let go there: no flick")
+      A.eq(controls.flick_action(s, seat, "triggerleft", 1), nil, "triggers do nothing")
+   end
 end
 
 --- Feed the right stick round to `deg` degrees (clockwise as seen) from
