@@ -1,47 +1,48 @@
---- The blunkychunks board: a hexagon of side `n` cut from the triangular
---- tiling, its three defended walls, and the rules for firing a chunk at one.
+--- The blunkychunks board: the notched hexagon in its walls, laid out as one
+--- flat, integer-indexed matrix.
 ---
---- Wall numbering
---- --------------
---- Walls are indexed 0..5 clockwise from the right-hand vertex, so wall j runs
---- from corner j to corner j+1 and its outward normal points at 30 + 60j
---- degrees. Players hold the odd walls; the even walls are neutral.
+--- Shape
+--- -----
+--- `n` is the side of the central hexagon (half of --diameter) and `r` the
+--- notch. The central hexagon's walls 0..5 run clockwise from the right-hand
+--- vertex, wall j from corner j to corner j+1. The board is the hexagon of side
+--- n + r with the notches at corners 1, 3 and 5 cut out (the cells past both
+--- walls that meet there), which leaves three homes, each a V wrapped round
+--- one of the central hexagon's corners 0, 2 and 4:
 ---
----                      4 (neutral)
----                   ___________
----       3 (P2)     /           \     5 (P3)
----                 /             \
----                 \             /
----       2 (neutral)\___________/      0 (neutral)
----                      1 (P1)
+---   Player 1  southwest  corner 2, past walls 1 and 2
+---   Player 2  northwest  corner 4, past walls 3 and 4
+---   Player 3  east       corner 0, past walls 5 and 0
 ---
---- Firing
---- ------
---- A chunk translates by Eisenstein steps, so it can only travel along the
---- three lattice directions -- each of which is parallel to one opposite pair
---- of walls. A player's heading is fixed by their own wall `w` and the turn,
---- whichever of their two walls they launch from:
+--- A home's dashed line is the two central walls it lies past. Its back wall is
+--- the rest of its outline, which is the edge of the board. Each home holds
+--- 4nr triangles and the middle 6n^2.
 ---
----   Turn A (clockwise):        launch from your wall or the one counter-
----                              clockwise of it; travel at 180 + 60w degrees,
----                              which from your own wall reaches wall w+2.
----   Turn B (counterclockwise): launch from your wall or the one clockwise of
----                              it; travel at 240 + 60w degrees, which from
----                              your own wall reaches wall w-2.
+--- The matrix
+--- ----------
+--- The board sits in the rhombus of side 2s, s = n + r + 1, whose rows are the
+--- k1 strips and whose columns pair up into k3 strips (see layouts.tl, which
+--- draws it). Every cell of the rhombus that is not on the board is wall.
+--- Cells are numbered (x, y) from the southwest corner, exactly as
+--- `tl run layouts.tl -- --board notched-hexagon-filled --cells` labels them:
 ---
---- From the loaned wall the same heading runs to wall w+3, the neutral wall
---- opposite your own, so a loaned shot is an interceptor rather than an
---- attack. On turn A Player 1 (bottom wall) heads northwest at Player 2,
---- Player 2 east at Player 3 and Player 3 southwest at Player 1; turn B
---- reverses the whole cycle.
+---   y = s - k1         the row: 1 along the bottom, 2s rows in all
+---   x = b + y + s      along the row: 4s columns, leaning northwest
+---
+--- and stored flat at i = (y - 1) * w + x, w = 4s. Every (x, y) in that
+--- rectangle is a cell, so every array here is full and no lookup returns
+--- nil. Up and down triangles alternate along a row while each column keeps
+--- one orientation: odd x points down and even x points up, and as w is even
+--- the same goes for i.
+---
+--- The walls are at least one strip deep everywhere, so from a board cell a
+--- step, or the cell a step passes over, is always another index of the
+--- matrix -- a wall, if nothing else -- and never wraps onto another row.
 ---
 --- Exactness
 --- ---------
---- Everything the rules depend on -- membership (`contains`), depth toward a
---- wall (`depth`, `placements`), the per-tick step (`step`) and the cell a
---- sliding triangle passes over (`swept`) -- is integer arithmetic on (a, b).
---- Functions that mention `side` or a normal vector produce screen geometry
---- for drawing and are never consulted by the simulation.
+--- Everything the rules use is integer arithmetic. Functions taking a `side`
+--- produce screen geometry for drawing and are never consulted by the rules.
 
 local bc = require("blunkychunks")
 
@@ -49,7 +50,7 @@ local record board
    record Player
       name: string
       color: string
-      wall: integer
+      corner: integer
    end
 
    record Seg
@@ -59,37 +60,111 @@ local record board
       y2: number
    end
 
-   record Shot
-      player: integer
-      wall: integer
-      dir: bc.XY
-      cells: {bc.Cell}
+   --- A triangle on the board: its index and its colour.
+   record Tri
+      i: integer
+      color: bc.Color
    end
 
-   enum Turn
-      "A"
-      "B"
+   --- One triangle of a Shape, relative to the shape's anchor.
+   record Offset
+      dx: integer
+      dy: integer
+      color: bc.Color
    end
 
+   --- A chunk as matrix offsets from an anchor (x, y). The lowest row is
+   --- dy = 0 and the leftmost column dx = 0 or 1; anchors have even x, so
+   --- each offset's parity is still its orientation.
+   record Shape
+      cells: {Offset}
+      w: integer -- largest dx
+      h: integer -- largest dy
+   end
+
+   --- Where a Shape's anchor goes.
+   record Spot
+      x: integer
+      y: integer
+   end
+
+   record Board
+      n: integer
+      r: integer
+      s: integer
+      w: integer
+      h: integer
+      size: integer -- w * h
+      kind: {integer} -- WALL, MIDDLE, or the player whose home it is
+      touch: {boolean} -- a home triangle with a corner on its back wall
+      a: {integer} -- Eisenstein coordinates, for drawing
+      b: {integer}
+      step: {integer} -- per heading: the index offset of one step
+      pass: {{integer}} -- per heading, [1] up / [2] down: the cell a step passes over
+      near: {{integer}} -- [1] up / [2] down: the three edge neighbours
+      cells: {integer} -- every board (non-wall) index, ascending
+      homes: {{integer}} -- per player, their home's indices
+      box: {{integer}} -- per player, their home's xmin, xmax, ymin, ymax
+   end
+
+   --- Screen geometry for drawing a board at some `side`.
+   record Geometry
+      grid: {Seg} -- edges between two board triangles
+      outline: {Seg} -- edges between a board triangle and a wall
+      walls: {integer} -- wall indices within one strip of the board
+   end
+
+   WALL: integer
+   MIDDLE: integer
    PLAYERS: {Player}
+   HEADING_NAMES: {string}
+   HEADINGS: {{integer}}
+   STEPS: {bc.AB}
    key: function(integer, integer): string
 end
 
 local type XY = bc.XY
 local type AB = bc.AB
-local type Cell = bc.Cell
 local type Seg = board.Seg
-local type Turn = board.Turn
+local type Tri = board.Tri
+local type Shape = board.Shape
+local type Board = board.Board
 
 local SQRT3 <const> = math.sqrt(3)
-local EPS <const> = 1e-9
 
---- Player 1 holds the bottom wall; 2 and 3 follow clockwise every other wall.
+board.WALL = -1
+board.MIDDLE = 0
+
+local WALL <const> = board.WALL
+local MIDDLE <const> = board.MIDDLE
+
+--- Player 1 holds the southwest home; 2 and 3 follow clockwise.
 board.PLAYERS = {
-   { name = "Player 1", color = bc.FILL.red, wall = 1 },
-   { name = "Player 2", color = bc.FILL.blue, wall = 3 },
-   { name = "Player 3", color = bc.FILL.green, wall = 5 },
+   { name = "Player 1", color = bc.FILL.red, corner = 2 },
+   { name = "Player 2", color = bc.FILL.blue, corner = 4 },
+   { name = "Player 3", color = bc.FILL.green, corner = 0 },
 }
+
+--- Headings 1..6 point at 0, 60, ... 300 degrees as drawn (y down).
+board.HEADING_NAMES = { "E", "SE", "SW", "W", "NW", "NE" }
+
+--- The same six headings as the shortest orientation-keeping Eisenstein
+--- translations. Only tests and drawing use these; the rules use `step`.
+board.STEPS = {
+   { a = 1, b = 2 }, { a = 2, b = 1 }, { a = 1, b = -1 },
+   { a = -1, b = -2 }, { a = -2, b = -1 }, { a = -1, b = 1 },
+}
+
+--- Each player fires the three headings pointing back across the board from
+--- their corner c: 60c + 120, 60c + 180 and 60c + 240 degrees. The middle one
+--- runs straight across, and gets out from anywhere in the home. The other two
+--- each run parallel to one of the home's dashed walls, so they only get out
+--- from the home's other arm. East fires SW, W or NW.
+board.HEADINGS = {}
+for p, pl in ipairs(board.PLAYERS) do
+   local c = pl.corner
+   board.HEADINGS[p] = { (c + 2) % 6 + 1, (c + 3) % 6 + 1, (c + 4) % 6 + 1 }
+end
 
 --- Cell (0, 0)'s centroid sits at the origin, but the board's centre is the
 --- six-fold lattice vertex at that cell's apex. Everything drawn gets shifted
@@ -98,10 +173,16 @@ local function origin_shift(side: number): number
    return side / SQRT3
 end
 
---- A cell's centroid in board space (y down, board centred on the origin).
-function board.centroid(a: integer, b: integer, side: number): XY
+--- Any Eisenstein point -- a cell's centroid or a lattice vertex -- in board
+--- space (y down, board centred on the origin).
+function board.point(a: integer, b: integer, side: number): XY
    local p = bc.centroid(a, b, side)
    return { x = p.x, y = p.y - origin_shift(side) }
+end
+
+--- A cell's centroid in board space.
+function board.centroid(a: integer, b: integer, side: number): XY
+   return board.point(a, b, side)
 end
 
 --- A cell's three corners in board space.
@@ -114,9 +195,28 @@ function board.corners(a: integer, b: integer, side: number): {XY}
    return out
 end
 
+--- A cell's three corners as lattice points, the Eisenstein integers with
+--- (a + b) % 3 == 1: z + 1, z + w, z + w^2 for a point-down cell z and
+--- z - 1, z - w, z - w^2 for a point-up one. Exact.
+function board.vertices(a: integer, b: integer): {AB}
+   if bc.is_up(a, b) then
+      return { { a = a - 1, b = b }, { a = a, b = b - 1 }, { a = a + 1, b = b + 1 } }
+   end
+   return { { a = a + 1, b = b }, { a = a, b = b + 1 }, { a = a - 1, b = b - 1 } }
+end
+
+--- The six cells round lattice vertex v: v +- 1, v +- w, v +- w^2.
+local function around(v: AB): {AB}
+   return {
+      { a = v.a + 1, b = v.b }, { a = v.a - 1, b = v.b },
+      { a = v.a, b = v.b + 1 }, { a = v.a, b = v.b - 1 },
+      { a = v.a + 1, b = v.b + 1 }, { a = v.a - 1, b = v.b - 1 },
+   }
+end
+
 --- Exact integer division by 3, rounding toward minus infinity. Lua's `%`
 --- already floors, so `x - x % 3` is a multiple of 3 and the division is exact
---- on doubles and Lua integers alike (no `//`, which is 5.3+).
+--- on doubles and Lua integers alike.
 local function idiv3(x: integer): integer
    return math.floor((x - x % 3) / 3)
 end
@@ -133,9 +233,7 @@ end
 ---   k2 = floor(-(a + b) / 3)        strips parallel to walls 0 / 3, wall 3 at max
 ---   k3 = floor((2b - a) / 3)        strips parallel to walls 2 / 5, wall 5 at max
 ---
---- A hexagon of side n is exactly the cells with all three in [-n, n-1]. This
---- is the whole of the gameplay geometry: everything with a sqrt(3) in it
---- below is for drawing.
+--- A hexagon of side n is exactly the cells with all three in [-n, n-1].
 function board.strips(a: integer, b: integer): integer, integer, integer
    return idiv3(2 * a - b) - 1, idiv3(-(a + b)), idiv3(2 * b - a)
 end
@@ -155,25 +253,199 @@ local WALL_STRIP <const>: {integer: {integer, integer}} = {
    [3] = { 2, 1 }, [4] = { 1, -1 }, [5] = { 3, 1 },
 }
 
---- How deep toward wall `j` cell (a, b) sits: an integer that grows by one per
---- strip, largest for the cells whose edge or apex lies on the wall. Exact.
-function board.depth(j: integer, a: integer, b: integer): integer
+--- Is cell (a, b) past wall `j` of the hexagon of side `n`? Exact.
+function board.beyond(n: integer, j: integer, a: integer, b: integer): boolean
    local k = { board.strips(a, b) }
-   local f = WALL_STRIP[j]
-   return f[2] * k[f[1]]
+   local fam = WALL_STRIP[j]
+   local v = k[fam[1]]
+   if fam[2] == 1 then return v >= n end
+   return v < -n
 end
 
---- Every cell of the hexagon of side `n`. There are exactly 6n^2 of them.
-function board.cells(n: integer): {AB}
-   local out: {AB} = {}
-   for a = -4 * n, 4 * n do
-      for b = -4 * n, 4 * n do
-         if board.contains(n, a, b) then
-            out[#out + 1] = { a = a, b = b }
+--- Is (a, b) on the notched board: the hexagon of side n + r without the
+--- notches at corners 1, 3 and 5? Corner j sits between walls j - 1 and j, so
+--- its notch is the cells past both. Opposite walls can't both be crossed, so
+--- the notches never overlap and the board holds 6(n + r)^2 - 6r^2 cells for
+--- any r. Exact.
+function board.notched(n: integer, r: integer, a: integer, b: integer): boolean
+   if not board.contains(n + r, a, b) then return false end
+   for _, j in ipairs({ 1, 3, 5 }) do
+      if board.beyond(n, (j - 1) % 6, a, b) and board.beyond(n, j, a, b) then return false end
+   end
+   return true
+end
+
+--- Is (a, b) in the rhombus of side 2s round the hexagon of side `s`: its rows
+--- and leaning columns, with the third family free? 8s^2 cells. Exact.
+function board.rhombus(s: integer, a: integer, b: integer): boolean
+   if not bc.is_cell(a, b) then return false end
+   local k1, _, k3 = board.strips(a, b)
+   return k1 >= -s and k1 < s and k3 >= -s and k3 < s
+end
+
+--- The matrix (x, y) of cell (a, b) for a rhombus of side 2s. Exact, and
+--- defined for every cell, in the rhombus or not.
+function board.xy_of(s: integer, a: integer, b: integer): integer, integer
+   local k1 = board.strips(a, b)
+   local y = s - k1
+   return b + y + s, y
+end
+
+--- The home cell (a, b) of the notched board lies in, or MIDDLE.
+local function home_of(n: integer, a: integer, b: integer): integer
+   for p, pl in ipairs(board.PLAYERS) do
+      local c = pl.corner
+      if board.beyond(n, (c - 1) % 6, a, b) or board.beyond(n, c, a, b) then return p end
+   end
+   return MIDDLE
+end
+
+--- Matrix index of (x, y).
+function board.index(B: Board, x: integer, y: integer): integer
+   return (y - 1) * B.w + x
+end
+
+--- Matrix (x, y) of index `i`.
+function board.xy(B: Board, i: integer): integer, integer
+   local y = (i - 1) // B.w + 1
+   return i - (y - 1) * B.w, y
+end
+
+--- Matrix index of cell (a, b), or nil outside the rhombus.
+function board.index_of(B: Board, a: integer, b: integer): integer
+   if not board.rhombus(B.s, a, b) then return nil end
+   local x, y = board.xy_of(B.s, a, b)
+   return board.index(B, x, y)
+end
+
+--- The notched board of central side `n` and notch `r`, framed in walls.
+function board.new(n: integer, r: integer): Board
+   if n < 1 then error(("the central hexagon needs a side of at least 1, got %d"):format(n)) end
+   if r < 1 then error(("the notch must be at least 1, got %d"):format(r)) end
+   local s = n + r + 1
+   local w, h = 4 * s, 2 * s
+   local B: Board = {
+      n = n, r = r, s = s, w = w, h = h, size = w * h,
+      kind = {}, touch = {}, a = {}, b = {},
+      cells = {}, homes = { {}, {}, {} }, box = {},
+   }
+
+   -- The rhombus reaches at most 3s + 3 from the origin in a and in b.
+   local lim = 4 * s + 4
+   local filled = 0
+   for a = -lim, lim do
+      for b = -lim, lim do
+         if board.rhombus(s, a, b) then
+            local i = board.index(B, board.xy_of(s, a, b))
+            if B.a[i] then error("two cells share matrix index " .. i) end
+            B.a[i], B.b[i] = a, b
+            B.kind[i] = board.notched(n, r, a, b) and home_of(n, a, b) or WALL
+            filled = filled + 1
          end
       end
    end
+   if filled ~= B.size then
+      error(("the rhombus filled %d of %d matrix cells"):format(filled, B.size))
+   end
+
+   for p = 1, #board.PLAYERS do B.box[p] = { w, 1, h, 1 } end
+   for i = 1, B.size do
+      B.touch[i] = false
+      local k = B.kind[i]
+      if k ~= WALL then B.cells[#B.cells + 1] = i end
+      if k > 0 then
+         local home = B.homes[k]
+         home[#home + 1] = i
+         local x, y = board.xy(B, i)
+         local box = B.box[k]
+         box[1], box[2] = math.min(box[1], x), math.max(box[2], x)
+         box[3], box[4] = math.min(box[3], y), math.max(box[4], y)
+         -- Touching the back wall: some corner is shared with a wall cell.
+         for _, v in ipairs(board.vertices(B.a[i], B.b[i])) do
+            for _, c in ipairs(around(v)) do
+               if B.kind[board.index_of(B, c.a, c.b)] == WALL then B.touch[i] = true end
+            end
+         end
+      end
+   end
+
+   -- Offsets read off the (x, y) labels: a heading moves (dx, dy) by
+   -- E (2, 0), SE (0, -1), SW (-2, -1), W (-2, 0), NW (0, 1), NE (2, 1),
+   -- and the triangle passed over depends on which way the mover points.
+   B.step = { 2, -w, -w - 2, -2, w, w + 2 }
+   B.pass = {
+      { 1, 1 }, -- E
+      { -w - 1, 1 }, -- SE
+      { -w - 1, -1 }, -- SW
+      { -1, -1 }, -- W
+      { -1, w + 1 }, -- NW
+      { 1, w + 1 }, -- NE
+   }
+   -- A point-up cell's third neighbour is below it, a point-down cell's above.
+   B.near = { { -1, 1, -w - 1 }, { -1, 1, w + 1 } }
+   return B
+end
+
+--- 1 for a point-up index, 2 for point-down: the slot `pass` and `near` use.
+function board.facing(i: integer): integer
+   return i % 2 + 1
+end
+
+--- `cells` (anywhere in Eisenstein coordinates) as a Shape for board `B`.
+--- The shift to the anchor is even in x, so orientations survive.
+function board.shape(B: Board, cells: {bc.Cell}): Shape
+   local xs, ys: {integer}, {integer} = {}, {}
+   local xmin, ymin: integer, integer = nil, nil
+   for k, c in ipairs(cells) do
+      xs[k], ys[k] = board.xy_of(B.s, c.a, c.b)
+      if not xmin or xs[k] < xmin then xmin = xs[k] end
+      if not ymin or ys[k] < ymin then ymin = ys[k] end
+   end
+   local sx = xmin - xmin % 2
+   local shape: Shape = { cells = {}, w = 0, h = 0 }
+   for k, c in ipairs(cells) do
+      local o: board.Offset = { dx = xs[k] - sx, dy = ys[k] - ymin, color = c.color }
+      shape.cells[k] = o
+      shape.w = math.max(shape.w, o.dx)
+      shape.h = math.max(shape.h, o.dy)
+   end
+   return shape
+end
+
+--- `shape` with its anchor at (x, y): its triangles on the board, or nil if
+--- any would fall outside the matrix. `x` must be even.
+function board.place(B: Board, shape: Shape, x: integer, y: integer): {Tri}
+   if x % 2 ~= 0 then error(("anchor x must be even, got %d"):format(x)) end
+   local out: {Tri} = {}
+   for k, o in ipairs(shape.cells) do
+      local cx, cy = x + o.dx, y + o.dy
+      if cx < 1 or cx > B.w or cy < 1 or cy > B.h then return nil end
+      out[k] = { i = board.index(B, cx, cy), color = o.color }
+   end
    return out
+end
+
+--- --diameter and --notch from a command line: the central hexagon's width in
+--- triangles, which must be even, and the notch. Defaults 22 and 8. Returns
+--- n (half the diameter) and r.
+function board.options(argv: {string}): integer, integer
+   local function int(name: string, fallback: integer): integer
+      for i, a in ipairs(argv) do
+         if a == "--" .. name then
+            local v = tonumber(argv[i + 1] or "")
+            if not v or v ~= math.floor(v) then error("--" .. name .. " needs a whole number") end
+            return math.floor(v)
+         end
+      end
+      return fallback
+   end
+   local diameter = int("diameter", 22)
+   if diameter < 2 or diameter % 2 ~= 0 then
+      error("--diameter must be a positive even number of triangles")
+   end
+   local r = int("notch", 8)
+   if r < 1 then error("--notch must be at least 1") end
+   return diameter // 2, r
 end
 
 local function key(a: integer, b: integer): string
@@ -181,66 +453,59 @@ local function key(a: integer, b: integer): string
 end
 board.key = key
 
---- A membership set, so placement search is a hash lookup per cell.
-function board.cell_set(cells: {AB}): {string: boolean}
-   local set: {string: boolean} = {}
-   for _, c in ipairs(cells) do
-      set[key(c.a, c.b)] = true
-   end
-   return set
-end
-
---- Corner `i` (0-based, clockwise from the right-hand vertex) of the hexagon.
+--- Corner `i` (0-based, clockwise from the right-hand vertex) of the hexagon
+--- of side `n`, in board space.
 function board.corner(n: integer, side: number, i: integer): XY
    local r = n * side
    local t = i * 60 * math.pi / 180
    return { x = r * math.cos(t), y = r * math.sin(t) }
 end
 
---- Wall `j` as a segment.
+--- Wall `j` of the hexagon of side `n` as a segment. The central hexagon's
+--- six walls are the players' dashed lines.
 function board.wall(n: integer, side: number, j: integer): Seg
    local p = board.corner(n, side, j)
    local q = board.corner(n, side, (j + 1) % 6)
    return { x1 = p.x, y1 = p.y, x2 = q.x, y2 = q.y }
 end
 
---- The outward unit normal of wall `j`, at 30 + 60j degrees.
-function board.wall_normal(j: integer): XY
-   local t = (30 + 60 * j) * math.pi / 180
-   return { x = math.cos(t), y = math.sin(t) }
+--- The edge cells i and j share, as a segment in board space.
+local function shared_edge(B: Board, i: integer, j: integer, side: number): Seg
+   local pts: {XY} = {}
+   for _, v in ipairs(board.vertices(B.a[i], B.b[i])) do
+      for _, u in ipairs(board.vertices(B.a[j], B.b[j])) do
+         if u.a == v.a and u.b == v.b then pts[#pts + 1] = board.point(v.a, v.b, side) end
+      end
+   end
+   return { x1 = pts[1].x, y1 = pts[1].y, x2 = pts[2].x, y2 = pts[2].y }
 end
 
---- The heading player `p` (1-based) fires on this turn, as a unit vector. It
---- depends on the player's own wall `w` alone, not on the launch wall.
----
---- Turn A aims at wall w+2 (180 + 60w degrees), turn B at wall w-2 (240 + 60w).
---- Both are multiples of 60 degrees, i.e. genuine lattice directions.
-function board.fire_dir(p: integer, turn: Turn): XY
-   local w = board.PLAYERS[p].wall
-   local t = ((turn == "A" and 180 or 240) + 60 * w) * math.pi / 180
-   return { x = math.cos(t), y = math.sin(t) }
-end
-
---- The six shortest orientation-preserving translations: (da + db) % 3 == 0
---- and one side long. In board space they point at 0, 60, ... 300 degrees.
-local STEPS <const>: {AB} = {
-   { a = 1, b = 2 }, { a = 2, b = 1 }, { a = 1, b = -1 },
-   { a = -1, b = -2 }, { a = -2, b = -1 }, { a = -1, b = 1 },
-}
-
---- The lattice step player `p`'s chunks take each tick: STEPS[i] points at
---- 60(i - 1) degrees, and `fire_dir` is 180 + 60w (turn A) or 240 + 60w
---- (turn B) for the player's own wall `w`, so this is a pure index lookup.
-function board.step(p: integer, turn: Turn): AB
-   local w = board.PLAYERS[p].wall
-   local i = ((turn == "A" and 3 or 4) + w) % 6 + 1
-   return { a = STEPS[i].a, b = STEPS[i].b }
+--- The board's lines at `side`: grid edges between board triangles, outline
+--- edges between the board and its walls, and the walls worth drawing (one
+--- strip deep round the board, which takes in the notches).
+function board.geometry(B: Board, side: number): board.Geometry
+   local g: board.Geometry = { grid = {}, outline = {}, walls = {} }
+   for _, i in ipairs(B.cells) do
+      for _, d in ipairs(B.near[board.facing(i)]) do
+         local j = i + d
+         if B.kind[j] == WALL then
+            g.outline[#g.outline + 1] = shared_edge(B, i, j, side)
+         elseif j > i then
+            g.grid[#g.grid + 1] = shared_edge(B, i, j, side)
+         end
+      end
+   end
+   for i = 1, B.size do
+      if B.kind[i] == WALL and board.contains(B.n + B.r + 1, B.a[i], B.b[i]) then
+         g.walls[#g.walls + 1] = i
+      end
+   end
+   return g
 end
 
 --- The cell a triangle sweeps through when it takes `step` from (a, b): the
---- one neighbour it shares with its destination. A rigid slide of one side
---- passes right over that opposite-orientation triangle, so it must be free
---- too. Exact.
+--- one neighbour it shares with its destination. Exact. The rules read this
+--- off `Board.pass`; tests use this to check that table.
 function board.swept(a: integer, b: integer, step: AB): AB
    local dest = bc.neighbors(a + step.a, b + step.b)
    for _, p in ipairs(bc.neighbors(a, b)) do
@@ -249,156 +514,6 @@ function board.swept(a: integer, b: integer, step: AB): AB
       end
    end
    error(("(%d, %d) is not a unit step"):format(step.a, step.b))
-end
-
---- The wall player `p`'s chunk travels toward when launched from wall `j`
---- this turn: the opponent two walls around the sweep from their own wall,
---- or, from the loaned wall, the neutral wall opposite their own.
-function board.target_wall(p: integer, j: integer, turn: Turn): integer
-   local w = board.PLAYERS[p].wall
-   if j ~= w then return (w + 3) % 6 end
-   return turn == "A" and (w + 2) % 6 or (w - 2) % 6
-end
-
---- The two walls player `p` (1-based) may fire from this turn: their own, and
---- the neutral wall on the trailing side of the sweep.
-function board.launch_walls(p: integer, turn: Turn): {integer}
-   local w = board.PLAYERS[p].wall
-   local other = turn == "A" and (w - 1) % 6 or (w + 1) % 6
-   return { w, other }
-end
-
---- Every distinct grid edge of the board, deduplicated between shared cells.
-function board.grid_segments(n: integer, side: number): {Seg}
-   local seen: {string: boolean} = {}
-   local out: {Seg} = {}
-   for _, c in ipairs(board.cells(n)) do
-      local pts = board.corners(c.a, c.b, side)
-      for i = 1, 3 do
-         local p, q = pts[i], pts[i % 3 + 1]
-         local a = ("%.4f,%.4f"):format(p.x, p.y)
-         local b = ("%.4f,%.4f"):format(q.x, q.y)
-         local k = a < b and a .. "|" .. b or b .. "|" .. a
-         if not seen[k] then
-            seen[k] = true
-            out[#out + 1] = { x1 = p.x, y1 = p.y, x2 = q.x, y2 = q.y }
-         end
-      end
-   end
-   return out
-end
-
-local board_sets: {integer: {string: boolean}} = {}
-
---- The cell set of the hexagon of side `n`, computed once per size.
-function board.cached_cell_set(n: integer): {string: boolean}
-   local set = board_sets[n]
-   if not set then
-      set = board.cell_set(board.cells(n))
-      board_sets[n] = set
-   end
-   return set
-end
-
---- Every legal translation that lands `chunk` flush against wall `j`.
----
---- Only translations with (da + db) % 3 == 0 preserve triangle orientation, so
---- those are the only ones a fired chunk may use. Among the translations that
---- land the whole chunk on the board without touching a `blocked` cell we keep
---- the ones pressed hardest against wall `j` (maximum `depth`). Exact. Empty
---- when nothing fits.
-function board.placements(n: integer, chunk: {Cell}, j: integer, blocked: {string: boolean}): {AB}
-   local set = board.cached_cell_set(n)
-
-   -- Seeded from the first cell rather than math.maxinteger, which is 5.3+.
-   local amin, amax = chunk[1].a, chunk[1].a
-   local bmin, bmax = chunk[1].b, chunk[1].b
-   for _, c in ipairs(chunk) do
-      amin, amax = math.min(amin, c.a), math.max(amax, c.a)
-      bmin, bmax = math.min(bmin, c.b), math.max(bmax, c.b)
-   end
-
-   local lim = 4 * n
-   local best = -math.huge
-   local bests: {AB} = {}
-
-   for da = -lim - amin, lim - amax do
-      for db = -lim - bmin, lim - bmax do
-         if (da + db) % 3 == 0 then
-            local ok = true
-            local reach = -math.huge
-            for _, c in ipairs(chunk) do
-               local k = key(c.a + da, c.b + db)
-               if not set[k] or blocked[k] then
-                  ok = false
-                  break
-               end
-               local d = board.depth(j, c.a + da, c.b + db)
-               if d > reach then reach = d end
-            end
-            if ok then
-               if reach > best then
-                  best, bests = reach, { { a = da, b = db } }
-               elseif reach == best then
-                  bests[#bests + 1] = { a = da, b = db }
-               end
-            end
-         end
-      end
-   end
-
-   return bests
-end
-
---- `chunk` translated by `t`.
-function board.translate(chunk: {Cell}, t: AB): {Cell}
-   local out: {Cell} = {}
-   for i, c in ipairs(chunk) do
-      out[i] = { a = c.a + t.a, b = c.b + t.b, color = c.color }
-   end
-   return out
-end
-
---- Slide `chunk` onto an empty board so that it rests against wall `j`,
---- picking one of the flush placements at random so chunks scatter along the
---- wall rather than always centring.
-function board.place(n: integer, chunk: {Cell}, j: integer, rng: function(): number): {Cell}
-   local bests = board.placements(n, chunk, j, {})
-   if #bests == 0 then
-      error(("no placement of a %d-cell chunk fits against wall %d"):format(#chunk, j))
-   end
-   return board.translate(chunk, bests[math.floor(rng() * #bests) + 1])
-end
-
---- How far a ray from `p` along unit `dir` travels before leaving the hexagon.
-function board.exit_distance(n: integer, side: number, p: XY, dir: XY): number
-   local apothem = n * side * SQRT3 / 2
-   local normals = { board.wall_normal(1), board.wall_normal(3), board.wall_normal(5) }
-   local t = math.huge
-   for _, m in ipairs(normals) do
-      local denom = dir.x * m.x + dir.y * m.y
-      local here = p.x * m.x + p.y * m.y
-      if denom > EPS then
-         t = math.min(t, (apothem - here) / denom)
-      elseif denom < -EPS then
-         t = math.min(t, (-apothem - here) / denom)
-      end
-   end
-   return t
-end
-
---- One player's shot for a turn: a fresh chunk, a launch wall chosen at random
---- from the two legal ones, and the heading it travels on.
-function board.shoot(n: integer, p: integer, turn: Turn, size: integer, rng: function(): number): board.Shot
-   local options = board.launch_walls(p, turn)
-   local j = options[math.floor(rng() * #options) + 1]
-   local chunk = bc.generate(size, rng)
-   return {
-      player = p,
-      wall = j,
-      dir = board.fire_dir(p, turn),
-      cells = board.place(n, chunk, j, rng),
-   }
 end
 
 return board

@@ -20,7 +20,8 @@
 ---
 --- Translating a chunk means adding (da, db) with (da + db) % 3 == 0; those are
 --- the translations that keep every triangle's orientation, so they are the only
---- ones a fired chunk may use.
+--- ones a sliding chunk may use. Rotating by 60 degrees about a lattice vertex
+--- also maps cells to cells, swapping up and down (see `rotate`).
 ---
 --- Everything here is plain Lua 5.1-compatible once compiled, so it can be
 --- dropped straight into a LOVE2D project.
@@ -52,6 +53,7 @@ local record blunkychunks
    end
 
    COLORS: {Color}
+   CODE: {Color: integer}
    FILL: {Color: string}
    mod3: function(integer): integer
 end
@@ -64,6 +66,9 @@ local type XY = blunkychunks.XY
 local SQRT3 <const> = math.sqrt(3)
 
 blunkychunks.COLORS = { "red", "green", "blue" }
+
+--- Each color's place in COLORS, for integer-valued colour matrices.
+blunkychunks.CODE = { red = 1, green = 2, blue = 3 }
 
 blunkychunks.FILL = {
    red = "#d6494f",
@@ -180,6 +185,27 @@ function blunkychunks.generate(size: integer, rng: function(): number): {Cell}
    end
 
    return chunk
+end
+
+--- `cells` turned `k` times by 60 degrees counterclockwise (as drawn, y down)
+--- about the lattice vertex z = 1. Multiplying by the unit 1 + w turns the
+--- plane by 60 degrees, and z -> 1 + (z - 1)(1 + w) is, in (a, b),
+---
+---   (a, b) -> (a - b, a - 1)
+---
+--- which flips every cell's orientation, so the result is still made of cells.
+--- Exact; k may be any integer.
+function blunkychunks.rotate(cells: {Cell}, k: integer): {Cell}
+   local out: {Cell} = {}
+   for i, c in ipairs(cells) do
+      out[i] = { a = c.a, b = c.b, color = c.color }
+   end
+   for _ = 1, k % 6 do
+      for _, c in ipairs(out) do
+         c.a, c.b = c.a - c.b, c.a - 1
+      end
+   end
+   return out
 end
 
 --- The centroid of a cell, in SVG space (y down). `side` is the edge length.

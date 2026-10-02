@@ -7,7 +7,8 @@
 ---   tl run layouts.tl -- --cells              # label every cell (x, y); *-cells.svg
 ---   tl run layouts.tl -- --out /tmp/layouts   # somewhere other than images/layouts
 ---
---- Boards: hexagon, triangle, hexagram, truncated-hexagram, notched-hexagon.
+--- Boards: hexagon, triangle, hexagram, truncated-hexagram, notched-hexagon,
+--- notched-hexagon-filled.
 ---
 ---   --diameter  the central hexagon's width in triangles, so its side n is
 ---               half of it (must be even; default 20)
@@ -16,21 +17,38 @@
 ---
 --- Cell labels
 --- -----------
---- With --cells each triangle is labelled (x, y), counted from the board's
---- southwest corner so both are never negative:
+--- With --cells each triangle is labelled (x, y), counted from 1 at the
+--- board's southwest corner, the way Lua counts:
 ---
----   y  the row, 0 along the bottom and one more per row going north
+---   y  the row, 1 along the bottom and one more per row going north
 ---   x  the triangle's place along its row, one per triangle going east, with
 ---      the columns leaning northwest (parallel to the southwest wall), so
----      x stays the same climbing that wall and (0, 0) is the corner triangle
+---      x stays the same climbing that wall and (1, 1) is the corner triangle
 ---
---- Up and down triangles alternate along a row, so x + y is even for one
---- orientation and odd for the other. Labels are derived from (a, b) with
---- integer arithmetic only: b already counts half-triangle steps east, and the
+--- Up and down triangles alternate along a row while each leaning column keeps
+--- one orientation, so x alone tells them apart: odd x matches (1, 1). Labels
+--- are derived from (a, b) with integer arithmetic only: b already counts half-triangle steps east, and the
 --- horizontal strip k1 counts rows.
 ---
---- Standalone: it reads board.strips for the lattice geometry but nothing in
---- the game consults these shapes.
+--- Walls
+--- -----
+--- notched-hexagon-filled draws the notched hexagon inside a rhombus of walls
+--- and shades everything between the two as mottled wall. It starts from the
+--- hexagon of side s = n + r + 1, one lattice strip bigger than the board on
+--- every side -- two triangles deep, an up and a down, counted along a row --
+--- which also takes in the three open notches. Rows are k1 strips and the
+--- leaning columns pair up into k3 strips, so dropping the hexagon's k2 limits
+--- (its southeast and northwest walls) leaves the rhombus of side 2s with k1
+--- and k3 both in [-s, s-1]: the hexagon plus a triangle of side s at each of
+--- those two corners, 8s^2 cells in all. That fills out the labels' rectangle,
+--- so every row runs x = 1..4s and every column y = 1..2s with nothing missing.
+--- Labels count from the walls, so (1, 1) is the wall triangle at the
+--- southwest corner and the board's own corner triangle is (3, 2).
+---
+--- It reads board.tl for the lattice geometry. The notched hexagon and its walls
+--- are board.tl's own (board.notched, board.rhombus), so the notched pictures
+--- show exactly the board the game plays on; nothing in the game consults the
+--- other shapes.
 ---
 --- Shapes
 --- ------
@@ -101,6 +119,7 @@ local record Layout
    contains: function(integer, integer): boolean
    expect: integer -- the cell count the formula above predicts
    invalid: string -- why this board can't be drawn with these settings, if it can't
+   field: function(integer, integer): boolean -- if set, what's drawn: the board plus walls
 end
 
 local function in_up(n: integer, a: integer, b: integer): boolean
@@ -120,31 +139,9 @@ local function star(n: integer, r: integer): function(integer, integer): boolean
    end
 end
 
---- Which strip family, and which end of it, wall `j` sits at (as in board.tl).
-local WALL_STRIP <const>: {integer: {integer, integer}} = {
-   [0] = { 2, -1 }, [1] = { 1, 1 }, [2] = { 3, -1 },
-   [3] = { 2, 1 }, [4] = { 1, -1 }, [5] = { 3, 1 },
-}
-
---- Is cell (a, b) past wall `j` of the hexagon of side `n`? Exact.
-local function beyond(n: integer, j: integer, a: integer, b: integer): boolean
-   local k = { board.strips(a, b) }
-   local fam = WALL_STRIP[j]
-   local v = k[fam[1]]
-   if fam[2] == 1 then return v >= n end
-   return v < -n
-end
-
---- The hexagon of side n + r with the notches at `corners` cut out. Corner j
---- sits between walls j - 1 and j, so its notch is the cells past both.
-local function notched(n: integer, r: integer, corners: {integer}): function(integer, integer): boolean
-   return function(a: integer, b: integer): boolean
-      if not board.contains(n + r, a, b) then return false end
-      for _, j in ipairs(corners) do
-         if beyond(n, (j - 1) % 6, a, b) and beyond(n, j, a, b) then return false end
-      end
-      return true
-   end
+--- The notched hexagon, as the game plays it.
+local function notched(n: integer, r: integer): function(integer, integer): boolean
+   return function(a: integer, b: integer): boolean return board.notched(n, r, a, b) end
 end
 
 --- Every board, or the reason it can't be drawn at this size.
@@ -183,20 +180,30 @@ local function layouts(n: integer, r: integer): {Layout}
          file = "notched-hexagon", params = { 2 * n, r },
          name = ("Notched hexagon, inner side %d, notch %d"):format(n, r),
          note = "east, southwest and northwest notches filled in",
-         contains = notched(n, r, { 1, 3, 5 }),
+         contains = notched(n, r),
          expect = 6 * (n + r) * (n + r) - 3 * 2 * r * r,
+      },
+      {
+         file = "notched-hexagon-filled", params = { 2 * n, r },
+         name = ("Notched hexagon in its walls, inner side %d, notch %d"):format(n, r),
+         note = "mottled = wall, at least two triangles deep",
+         contains = notched(n, r),
+         expect = 6 * (n + r) * (n + r) - 3 * 2 * r * r,
+         field = function(a: integer, b: integer): boolean return board.rhombus(n + r + 1, a, b) end,
       },
    }
 end
 
---- Every cell of a layout. The hexagram's points reach 2n strips out, and the
---- triangle's corners 2n + 1, so a box of 8n + 8 in (a, b) holds them all.
-local function cells_of(n: integer, l: Layout): {AB}
-   local lim = 8 * n + 8
+--- Every cell passing `keep`. The hexagram's points reach 2n strips out and the
+--- triangle's corners 2n + 1, while the walls' rhombus reaches 2(n + r + 1)
+--- at its sharp corners; a box of 4 per strip in (a, b), with room to spare,
+--- holds them all.
+local function cells_of(n: integer, r: integer, keep: function(integer, integer): boolean): {AB}
+   local lim = 4 * math.max(2 * n + 2, 2 * (n + r) + 3)
    local out: {AB} = {}
    for a = -lim, lim do
       for b = -lim, lim do
-         if bc.is_cell(a, b) and l.contains(a, b) then
+         if bc.is_cell(a, b) and keep(a, b) then
             out[#out + 1] = { a = a, b = b }
          end
       end
@@ -240,36 +247,53 @@ local function cell_labels(cells: {AB}): {string: {integer, integer}}
    end
    local out: {string: {integer, integer}} = {}
    for i, c in ipairs(cells) do
-      out[board.key(c.a, c.b)] = { math.floor(raw[i][1] - qmin), raw[i][2] }
+      out[board.key(c.a, c.b)] = { math.floor(raw[i][1] - qmin) + 1, raw[i][2] + 1 }
    end
    return out
 end
 
---- One layout as an SVG: point-up cells shaded, the grid, the inner hexagon's
---- outline for reference, the shape's outline (edges only one cell owns) and,
---- if asked, every cell's (x, y).
-local function render(n: integer, side: number, l: Layout, cells: {AB}, labels: boolean): string
+--- Wall stone: a few close shades, picked per triangle so the walls read as
+--- mottled even before the noise filter roughens each one up.
+local STONE <const> = { "#b9ad9b", "#a99d8b", "#c4b9a8", "#9f9381", "#b2a593" }
+
+local function stone(a: integer, b: integer): string
+   local h = (a * a * 7 + b * b * 13 + a * b * 5 + a * 3 + b) % #STONE
+   return STONE[math.floor(h) + 1]
+end
+
+--- One layout as an SVG: point-up cells shaded, mottled walls if the layout
+--- has them, the grid, the inner hexagon's outline for reference, the board's
+--- outline (edges only one board cell owns) and, if asked, every cell's (x, y).
+local function render(n: integer, side: number, l: Layout, cells: {AB}, walls: {AB},
+   labels: boolean): string
    local edges: {string: {XY}} = {}
-   local count: {string: integer} = {}
+   local count: {string: integer} = {} -- board cells on each edge
+   local total: {string: integer} = {} -- board and wall cells on each edge
    local order: {string} = {}
    local xmin, xmax, ymin, ymax = math.huge, -math.huge, math.huge, -math.huge
    local polys: {{XY}} = {}
-   for _, c in ipairs(cells) do
+   local function tally(c: AB, is_board: boolean): {XY}
       local pts = board.corners(c.a, c.b, side)
-      if bc.is_up(c.a, c.b) then polys[#polys + 1] = pts end
       for i = 1, 3 do
          local p, q = pts[i], pts[i % 3 + 1]
          local k = edge_key(p, q)
-         if not count[k] then
-            count[k] = 0
+         if not total[k] then
+            count[k], total[k] = 0, 0
             edges[k] = { p, q }
             order[#order + 1] = k
          end
-         count[k] = count[k] + 1
+         total[k] = total[k] + 1
+         if is_board then count[k] = count[k] + 1 end
          xmin, xmax = math.min(xmin, p.x), math.max(xmax, p.x)
          ymin, ymax = math.min(ymin, p.y), math.max(ymax, p.y)
       end
+      return pts
    end
+   for _, c in ipairs(cells) do
+      local pts = tally(c, true)
+      if bc.is_up(c.a, c.b) then polys[#polys + 1] = pts end
+   end
+   for _, c in ipairs(walls) do tally(c, false) end
 
    local w = xmax - xmin + 2 * PAD
    local h = ymax - ymin + 2 * PAD + TITLE_H
@@ -282,19 +306,52 @@ local function render(n: integer, side: number, l: Layout, cells: {AB}, labels: 
    }
    local function emit(s: string) out[#out + 1] = s end
 
-   emit(('  <g fill="%s" stroke="none">'):format(UP_FILL))
-   for _, pts in ipairs(polys) do
+   local function points(pts: {XY}): string
       local ps: {string} = {}
       for i, p in ipairs(pts) do ps[i] = f(p.x + ox) .. "," .. f(p.y + oy) end
-      emit(('    <polygon points="%s"/>'):format(table.concat(ps, " ")))
+      return table.concat(ps, " ")
+   end
+
+   if #walls > 0 then
+      -- Fractal noise, greyed and remapped to 0.75..1.1, multiplied into each
+      -- triangle's stone shade, then clipped back to the triangles.
+      emit('  <defs>')
+      emit('    <filter id="mottle" x="0" y="0" width="100%" height="100%">')
+      emit('      <feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="3" seed="7"/>')
+      emit('      <feColorMatrix type="matrix" values="0.33 0.33 0.33 0 0  0.33 0.33 0.33 0 0'
+         .. '  0.33 0.33 0.33 0 0  0 0 0 0 1"/>')
+      emit('      <feComposite in="SourceGraphic" operator="arithmetic" k1="0.7" k2="0.75" k3="0" k4="0"/>')
+      emit('      <feComposite in2="SourceGraphic" operator="in"/>')
+      emit('    </filter>')
+      emit('  </defs>')
+      emit('  <g stroke="none" filter="url(#mottle)">')
+      for _, c in ipairs(walls) do
+         emit(('    <polygon points="%s" fill="%s"/>')
+            :format(points(board.corners(c.a, c.b, side)), stone(c.a, c.b)))
+      end
+      emit("  </g>")
+   end
+
+   emit(('  <g fill="%s" stroke="none">'):format(UP_FILL))
+   for _, pts in ipairs(polys) do
+      emit(('    <polygon points="%s"/>'):format(points(pts)))
    end
    emit("  </g>")
 
    emit(('  <g stroke="%s" stroke-width="0.8" stroke-linecap="round">'):format(GRID))
    for _, k in ipairs(order) do
-      if count[k] == 2 then emit(seg(edges[k][1], edges[k][2], ox, oy, "")) end
+      if total[k] == 2 and count[k] ~= 1 then emit(seg(edges[k][1], edges[k][2], ox, oy, "")) end
    end
    emit("  </g>")
+
+   -- The walls' own outside edge, lighter than the board's.
+   if #walls > 0 then
+      emit(('  <g stroke="%s" stroke-width="1.6" stroke-linecap="round">'):format(INNER))
+      for _, k in ipairs(order) do
+         if total[k] == 1 then emit(seg(edges[k][1], edges[k][2], ox, oy, "")) end
+      end
+      emit("  </g>")
+   end
 
    if l.file ~= "hexagon" then
       emit(('  <g stroke="%s" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round">')
@@ -313,10 +370,13 @@ local function render(n: integer, side: number, l: Layout, cells: {AB}, labels: 
    emit("  </g>")
 
    if labels then
-      local xy = cell_labels(cells)
+      local all: {AB} = {}
+      for _, c in ipairs(cells) do all[#all + 1] = c end
+      for _, c in ipairs(walls) do all[#all + 1] = c end
+      local xy = cell_labels(all)
       emit(('  <g fill="%s" font-family="Helvetica, Arial, sans-serif" font-size="%s"'
          .. ' text-anchor="middle" dominant-baseline="central">'):format(INK, f(side * 0.2)))
-      for _, c in ipairs(cells) do
+      for _, c in ipairs(all) do
          local p = board.centroid(c.a, c.b, side)
          -- Nudge toward the wide end of the triangle, where there's more room.
          local nudge = side * 0.05
@@ -330,8 +390,10 @@ local function render(n: integer, side: number, l: Layout, cells: {AB}, labels: 
    local font = 'font-family="Helvetica, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle"'
    emit(('  <text x="%s" y="%s" fill="%s" %s font-size="19" font-weight="600">%s</text>')
       :format(f(w / 2), f(PAD + 4), INK, font, l.name))
-   emit(('  <text x="%s" y="%s" fill="%s" %s font-size="12">%s &#183; %d triangles</text>')
-      :format(f(w / 2), f(PAD + 26), GRID, font, l.note, #cells))
+   local tally_note = ("%d triangles"):format(#cells)
+   if #walls > 0 then tally_note = tally_note .. (" + %d wall"):format(#walls) end
+   emit(('  <text x="%s" y="%s" fill="%s" %s font-size="12">%s &#183; %s</text>')
+      :format(f(w / 2), f(PAD + 26), GRID, font, l.note, tally_note))
    emit("</svg>")
    return table.concat(out, "\n") .. "\n"
 end
@@ -390,16 +452,31 @@ local function main(argv: {string})
          if pick then error(l.file .. ": " .. l.invalid) end
          print(("skipped %s: %s"):format(l.file, l.invalid))
       else
-         local cells = cells_of(n, l)
+         local cells = cells_of(n, r, l.contains)
          if #cells ~= l.expect then
             error(("%s: %d cells, expected %d"):format(l.file, #cells, l.expect))
+         end
+         local walls: {AB} = {}
+         if l.field then
+            local field = l.field
+            walls = cells_of(n, r, function(a: integer, b: integer): boolean
+               return field(a, b) and not l.contains(a, b)
+            end)
+            local outer = n + r + 1
+            if #cells + #walls ~= 8 * outer * outer then
+               error(("%s: %d walls, expected %d"):format(l.file, #walls, 8 * outer * outer - #cells))
+            end
          end
          local stem = l.file
          for _, v in ipairs(l.params) do stem = stem .. "-" .. v end
          if labels then stem = stem .. "-cells" end
          local path = ("%s/%s.svg"):format(dir, stem)
-         write(path, render(n, side, l, cells, labels))
-         print(("wrote %s (%d triangles)"):format(path, #cells))
+         write(path, render(n, side, l, cells, walls, labels))
+         if #walls > 0 then
+            print(("wrote %s (%d triangles, %d wall)"):format(path, #cells, #walls))
+         else
+            print(("wrote %s (%d triangles)"):format(path, #cells))
+         end
       end
    end
 end
