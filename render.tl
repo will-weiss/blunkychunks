@@ -8,6 +8,7 @@
 ---   tl run render.tl -- --n 6 --side 40       # a smaller board
 ---   tl run render.tl -- --seed 42             # a different pair of turns
 ---   tl run render.tl -- --out /tmp/out         # somewhere other than images/
+---   tl run render.tl -- --cells               # label every cell with its (a, b)
 ---
 --- Compiled, there is nothing to separate:
 ---
@@ -41,6 +42,11 @@ local EPS <const> = 1e-6
 
 local function f(v: number): string
    return ("%.2f"):format(v)
+end
+
+--- An integer with a real minus sign, which is wider and reads better than "-".
+local function signed(v: integer): string
+   return v < 0 and ("&#8722;" .. -v) or tostring(v)
 end
 
 --- An SVG document being assembled line by line.
@@ -224,8 +230,7 @@ local function draw_axes(c: Canvas, n: integer, side: number)
             local p = board.centroid(cell.a, cell.b, side)
             local exit = add(p, u, apothem - dot(p, u))
             if math.abs(dot(exit, along)) <= half then
-               local body = v < 0 and ("&#8722;" .. -v) or tostring(v)
-               text(c, add(exit, u, AXIS_GAP), body, ('text-anchor="%s"'):format(anchor), angle)
+               text(c, add(exit, u, AXIS_GAP), signed(v), ('text-anchor="%s"'):format(anchor), angle)
             end
          end
       end
@@ -235,6 +240,25 @@ local function draw_axes(c: Canvas, n: integer, side: number)
       while name_angle > 90 do name_angle = name_angle - 180 end
       text(c, add({ x = 0, y = 0 }, u, apothem + AXIS_NAME_OFF), axis.name,
          'font-size="12" font-style="italic" text-anchor="middle"', name_angle)
+   end
+   emit(c, "  </g>")
+end
+
+--- Each cell's Eisenstein coordinates "a,b", written at its centroid: grey on
+--- the bare grid, white on a chunk's cells (`filled`, keyed by `board.key`).
+---
+--- The labels are small enough to fit, but only just, so each is nudged from
+--- the centroid toward the triangle's base, where it is widest.
+local function draw_cell_labels(c: Canvas, n: integer, side: number, filled: {string: boolean})
+   local size = side * 0.18
+   emit(c, ('  <g font-family="Helvetica, Arial, sans-serif" font-size="%s"'
+      .. ' text-anchor="middle" dominant-baseline="central">'):format(f(size)))
+   for _, cell in ipairs(board.cells(n)) do
+      local p = board.centroid(cell.a, cell.b, side)
+      local nudge = side * 0.05
+      p.y = p.y + (bc.is_up(cell.a, cell.b) and nudge or -nudge)
+      local fill = filled[board.key(cell.a, cell.b)] and PAPER or AXIS
+      text(c, p, signed(cell.a) .. "," .. signed(cell.b), ('fill="%s"'):format(fill), 0)
    end
    emit(c, "  </g>")
 end
@@ -317,18 +341,20 @@ local function title(c: Canvas, n: integer, side: number, body: string, note: st
 end
 
 --- The empty board.
-local function render_board(n: integer, side: number): string
+local function render_board(n: integer, side: number, cells: boolean): string
    local r = n * side
    local apothem = r * SQRT3 / 2
    local c = canvas(2 * r + 2 * PAD_X, 2 * apothem + 2 * PAD_Y, PAD_Y + apothem)
    draw_grid(c, n, side)
+   if cells then draw_cell_labels(c, n, side, {}) end
    draw_walls(c, n, side, nil)
    draw_axes(c, n, side)
    return finish(c)
 end
 
 --- The board with one shot per player.
-local function render_turn(n: integer, side: number, turn: Turn, size: integer, seed: integer): string
+local function render_turn(n: integer, side: number, turn: Turn, size: integer, seed: integer,
+   cells: boolean): string
    local r = n * side
    local apothem = r * SQRT3 / 2
    local c = canvas(2 * r + 2 * PAD_X, 2 * apothem + 2 * PAD_Y + TITLE_H, PAD_Y + TITLE_H + apothem)
@@ -339,6 +365,15 @@ local function render_turn(n: integer, side: number, turn: Turn, size: integer, 
    for p = 1, #board.PLAYERS do
       shots[p] = board.shoot(n, p, turn, size, rng)
       draw_chunk(c, shots[p].cells, side, board.PLAYERS[p].color)
+   end
+   if cells then
+      local filled: {string: boolean} = {}
+      for _, shot in ipairs(shots) do
+         for _, cell in ipairs(shot.cells) do
+            filled[board.key(cell.a, cell.b)] = true
+         end
+      end
+      draw_cell_labels(c, n, side, filled)
    end
    draw_walls(c, n, side, turn)
    draw_axes(c, n, side)
@@ -383,11 +418,15 @@ local function main(argv: {string})
    local size = math.floor(flag("size", 14))
    local seed = math.floor(flag("seed", 7))
    local dir = opt("out", "images")
+   local cells = false
+   for _, a in ipairs(argv) do
+      if a == "--cells" then cells = true end
+   end
 
    os.execute(("mkdir -p '%s'"):format(dir))
-   write(dir .. "/board.svg", render_board(n, side))
-   write(dir .. "/turn-a.svg", render_turn(n, side, "A", size, seed))
-   write(dir .. "/turn-b.svg", render_turn(n, side, "B", size, seed))
+   write(dir .. "/board.svg", render_board(n, side, cells))
+   write(dir .. "/turn-a.svg", render_turn(n, side, "A", size, seed, cells))
+   write(dir .. "/turn-b.svg", render_turn(n, side, "B", size, seed, cells))
 end
 
 main(_G.arg as {string} or {})
