@@ -211,6 +211,18 @@ local function let_go(s: sim.State, seat: controls.Seat): controls.Action
    return move(s, seat, 0, 0)
 end
 
+--- Swing player p's pushed-out left stick round the rim from `from` to `to`
+--- degrees off their corner, a few degrees at a time.
+local function swing(s: sim.State, seat: controls.Seat, from: number, to: number): controls.Action
+   local c = 60 * board.PLAYERS[seat.player].corner - 30
+   local step = to > from and 5 or -5
+   local out: controls.Action
+   for off = from + step, to, step do
+      out = move(s, seat, math.cos(math.rad(c + off)), math.sin(math.rad(c + off))) or out
+   end
+   return out
+end
+
 --- Degrees clockwise as seen from player p's corner to the aim's centroid,
 --- as drawn (a twelfth of a turn anticlockwise from board space).
 local function drawn_off(s: sim.State, seat: controls.Seat): number
@@ -229,11 +241,12 @@ function T.the_left_stick_places_the_chunk_round_the_home()
       local seat = controls.human(s, p, "pad")
       local aim = seat.aim
       A.truthy(#aim.spots > 2, "room to place")
-      A.eq(point(s, seat, 120), nil, "pointing at the home doesn't fire")
+      A.eq(point(s, seat, 0), nil, "pointing at the home doesn't fire")
+      A.eq(swing(s, seat, 0, 120), nil, "nor does swinging round it")
       A.eq(aim.pick, 1, "fully clockwise: the back wall's start")
       local start = drawn_off(s, seat)
       A.truthy(start > 0, "which is clockwise of the corner as drawn")
-      point(s, seat, -120)
+      swing(s, seat, 120, -120)
       A.eq(aim.pick, #aim.spots, "fully anticlockwise: its end")
       A.truthy(drawn_off(s, seat) < 0, "anticlockwise of the corner")
       point(s, seat, 0)
@@ -250,10 +263,26 @@ function T.the_left_stick_places_the_chunk_round_the_home()
    end
 end
 
+function T.once_placed_anywhere_across_the_board_aims()
+   -- Placed at the right of Player 1's home, then flicked up and to the
+   -- left, northwest: lower than the heading itself, but still across.
+   local s = fresh()
+   local seat = controls.human(s, 1, "pad")
+   local aim = seat.aim
+   point(s, seat, -60)
+   local spot = aim.pick
+   A.eq(let_go(s, seat), nil, "placed")
+   A.eq(point(s, seat, 100), nil, "pointed up and to the left")
+   A.eq(aim.pick, spot, "doesn't move the chunk to the west wall")
+   A.eq(aim.prefer, 1, "picks northwest")
+   A.eq(let_go(s, seat), "flick", "and flicks")
+end
+
 function T.the_left_stick_follows_its_angle_while_the_chunk_rotates()
    local s = fresh()
    local seat = controls.human(s, 1, "pad")
-   point(s, seat, 120)
+   point(s, seat, 0)
+   swing(s, seat, 0, 120)
    for _ = 1, 6 do
       controls.act(s, seat, "turn_cw")
       if seat.aim.pick then A.eq(seat.aim.pick, 1, "still at the start") end
@@ -268,18 +297,20 @@ function T.a_flick_across_the_board_picks_a_heading_and_fires_when_let_go()
       point(s, seat, 0)
       local spot = aim.pick
       A.eq(let_go(s, seat), nil, "placed")
-      for _, case in ipairs({ { 180, 2 }, { -165, 2 }, { 165, 2 }, { 140, 1 }, { 125, 1 }, { -140, 3 }, { -125, 3 } }) do
+      for _, case in ipairs({ { 180, 2 }, { -155, 2 }, { 155, 2 }, { 140, 1 }, { 95, 1 }, { -140, 3 }, { -95, 3 } }) do
          A.eq(point(s, seat, case[1]), nil, "pointing across doesn't fire yet")
          A.eq(aim.prefer, case[2], ("%d degrees picks heading %d"):format(case[1], case[2]))
          A.eq(let_go(s, seat), "flick", "letting go is the flick")
          A.eq(aim.pick, spot, "the chunk stayed where it was placed")
       end
       point(s, seat, 180)
-      local c = 60 * board.PLAYERS[p].corner - 30
-      for _, off in ipairs({ 120, 0 }) do
-         move(s, seat, math.cos(math.rad(c + off)), math.sin(math.rad(c + off)))
-      end
-      A.eq(let_go(s, seat), nil, "swung round the rim to the home and let go there: no flick")
+      swing(s, seat, 180, 0)
+      A.eq(aim.pick, spot, "an aiming push never places, wherever it goes")
+      A.eq(let_go(s, seat), "flick", "and letting go still flicks")
+      point(s, seat, 0)
+      A.eq(swing(s, seat, 0, 140), nil, "a placing push swung past the home's end")
+      A.eq(aim.prefer, 1, "aims from there")
+      A.eq(let_go(s, seat), "flick", "and flicks when let go")
       A.eq(controls.flick_action(s, seat, "triggerleft", 1), nil, "triggers do nothing")
    end
 end

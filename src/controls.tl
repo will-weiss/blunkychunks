@@ -65,11 +65,14 @@ local record controls
       turns: integer -- rotations applied since the anchor, clockwise positive
    end
 
-   --- The left stick, which both places and fires. `heading` is the heading
-   --- it points at while pushed out across the board, until it's let go.
+   --- The left stick, which both places and fires. `aiming` is set for a
+   --- push that is picking a heading rather than placing, and `heading` is
+   --- the heading it points at, until it's let go.
    record Flick
       x: number
       y: number
+      aiming: boolean
+      placing: boolean
       heading: integer
    end
 
@@ -439,12 +442,16 @@ function controls.dial_actions(seat: Seat, axis: string, value: number): {Action
    return out
 end
 
---- The left stick points at the player's home within `REACH` degrees either
---- side of their corner, so the home gets two thirds of the stick, the side
---- facing it. The rest points across the board, at their headings: straight
---- across within `ACROSS` degrees of dead ahead, the side ones beyond that.
+--- A push of the left stick starts out placing the chunk if it first points
+--- within `HOME` degrees either side of the player's corner, the half of the
+--- stick facing their home, and aiming if it points anywhere across the board
+--- from there. Placing reaches `REACH` degrees round, so the home gets two
+--- thirds of the stick, and sweeping on past that turns the push to aiming.
+--- Aiming, straight across is within `ACROSS` degrees of dead ahead, and the
+--- side headings either side of that.
+local HOME <const> = 90
 local REACH <const> = 120
-local ACROSS <const> = 20
+local ACROSS <const> = 30
 
 --- Which way player `p`'s corner points as drawn, in degrees clockwise from
 --- east as seen (y down), like the stick's own angle. draw.tl turns board
@@ -454,13 +461,13 @@ local function corner_angle(p: integer): number
 end
 
 --- What a left-stick movement asks for: "flick" when it is let go after
---- pointing across the board, else nil. Pushed out towards the home, its
---- angle places the chunk along the back wall, one end to the other as it
---- goes round. Pushed out across the board, it picks the heading it points
---- at (the side ones, 60 degrees either side of straight across, take the
---- outer thirds), and letting go from there is the flick. Let go, the chunk
---- stays where it was placed; easing it between the two thresholds changes
---- nothing.
+--- aiming, else nil. A push that starts out towards the home places the
+--- chunk: its angle sets where along the back wall, one end to the other as
+--- it goes round. A push that starts out across the board (or sweeps round
+--- past the home's ends) aims: it picks the heading it points at, and only
+--- letting go ends it, so it never moves the chunk, wherever it wanders.
+--- Letting go after aiming is the flick. Let go, the chunk stays where it
+--- was placed; easing the stick between the two thresholds changes nothing.
 function controls.flick_action(state: sim.State, seat: Seat, axis: string, value: number): Action
    local f = seat.flick
    if not f then return nil end
@@ -469,18 +476,21 @@ function controls.flick_action(state: sim.State, seat: Seat, axis: string, value
    if not aim or not state.players[seat.player].alive then return nil end
    local r = math.sqrt(f.x * f.x + f.y * f.y)
    if r < REST then
-      local flicked = f.heading ~= nil
-      f.heading, aim.along = nil, nil
+      local flicked = f.aiming
+      f.aiming, f.placing, f.heading, aim.along = false, false, nil, nil
       return flicked and aim.pick and "flick" or nil
    end
    if r < PUSH then return nil end
    local off = (angle(f.x, f.y) - corner_angle(seat.player) + 180) % 360 - 180
-   if math.abs(off) <= REACH then
+   if not f.aiming and not f.placing then
+      if math.abs(off) <= HOME then f.placing = true else f.aiming = true end
+   end
+   if f.placing and math.abs(off) > REACH then f.placing, f.aiming = false, true end
+   if f.placing then
       -- Clockwise from the corner as seen is the back wall's start.
-      f.heading = nil
       aim.along = (REACH - off) / (2 * REACH)
       if #aim.spots > 0 and aim.pick ~= along_pick(aim.along, #aim.spots) then refresh_aim(state, seat) end
-   else
+   elseif math.abs(off) > HOME then
       local n = math.abs(off) >= 180 - ACROSS and 2 or off > 0 and 1 or 3
       f.heading = n
       if aim.prefer ~= n then

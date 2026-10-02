@@ -227,16 +227,18 @@ Holding a slide or a rotate, on the keyboard or a gamepad, keeps it going.
 
 The left stick places and fires. It is read as the board is drawn, so for
 Player 1 down is towards their home and up is across the board; for the
-others it's turned round to their corner. The two thirds of the stick facing
-your home (120° either side of your corner) are your home: push the stick
-there and its angle places the chunk along your back wall, from one end of
-your V at one edge of that range to the other end at the other. Let go and
-the chunk stays where you put it. The third facing across the board is your
-headings: point within 20° of straight across for straight across, and
-further round either side for the side heading that way. Pointing there
-picks the heading, and letting the stick go back to the middle from there
-is the **flick**. On the setup screen, *Controller flick* says what it does:
-it either fires at once, as `A` does, or just sets the heading and waits for
+others it's turned round to their corner. What a push does depends on where
+it first goes. Push it into the half facing your home (within 90° of your
+corner) and it places: its angle sets where the chunk sits along your back
+wall, and you can swing it on round up to 120° either side, two thirds of
+the stick, to reach the far ends of your V. Let go and the chunk stays where
+you put it. Push it into the half facing across the board and it aims: within
+30° of straight across picks straight across, and further round either side
+picks the side heading that way. An aiming push never moves the chunk,
+wherever the stick wanders, and swinging a placing push on past 120° turns it
+into one. Letting the stick go back to the middle after aiming is the
+**flick**. On the setup screen, *Controller flick* says what it does: it
+either fires at once, as `A` does, or just sets the heading and waits for
 your shot clock. The right stick can rotate the chunk the whole time. A
 flick at a heading that would be friendly fire from where the chunk is falls
 back to straight across, as changing heading does.
